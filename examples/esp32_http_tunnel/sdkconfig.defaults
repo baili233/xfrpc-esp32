@@ -1,0 +1,18 @@
+# xfrpc-esp32 project defaults (ESP32-S3)
+CONFIG_IDF_TARGET="esp32s3"
+
+# Main task only does init; xfrpc runs in its own task with a bigger stack
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# FreeRTOS tick 1000 Hz for finer timer resolution (mini-libevent timers)
+CONFIG_FREERTOS_HZ=1000
+
+# mbedtls: only needed for AES/PBKDF2/HMAC, no TLS in MVP -> save flash
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=n
+
+# lwip: allow more simultaneous TCP connections (control + proxies)
+CONFIG_LWIP_MAX_ACTIVE_TCP=16
+CONFIG_LWIP_MAX_LISTENING_TCP=16
+
+# WiFi
+CONFIG_ESP_WIFI_NVS_ENABLED=y

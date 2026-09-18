@@ -1,0 +1,37 @@
+menu "xfrpc example configuration"
+
+    config EXAMPLE_WIFI_SSID
+        string "WiFi SSID"
+        default "myssid"
+        help
+            SSID (network name) of the AP to connect the ESP32-S3 to.
+
+    config EXAMPLE_WIFI_PASSWORD
+        string "WiFi Password"
+        default "mypassword"
+        help
+            Password of the AP to connect the ESP32-S3 to.
+
+    config EXAMPLE_FRPS_SERVER_ADDR
+        string "frps server address"
+        default "192.168.1.100"
+        help
+            IP address (or hostname) of the frps server.
+
+    config EXAMPLE_FRPS_SERVER_PORT
+        int "frps server port"
+        default 7000
+
+    config EXAMPLE_FRPS_AUTH_TOKEN
+        string "frps auth token"
+        default "esp32-frpc-token"
+
+    config EXAMPLE_HTTP_SERVER_PORT
+        int "local HTTP server port (proxy target)"
+        default 8080
+
+    config EXAMPLE_PROXY_REMOTE_PORT
+        int "remote port exposed on frps"
+        default 6000
+
+endmenu
