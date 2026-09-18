@@ -36,4 +36,10 @@ extern debugconf_t debugconf;
 /** @internal */
 void _debug(const char *, int, int, const char *, ...);
 
+/**
+ * ESP32 port: fatal error handler — logs and stops the event loop.
+ * Replaces upstream exit(1) call sites; never reboots the chip.
+ */
+void xfrpc_fatal(const char *msg);
+
 #endif

@@ -18,6 +18,9 @@
 #include <unistd.h>
 #include <time.h>
 #include <stdbool.h>
+// ESP32 port: vTaskDelay replaces nanosleep (newlib has no implementation)
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #include "debug.h"
 #include "client.h"
@@ -36,6 +39,8 @@
 #include "proxy.h"
 #include "tls.h"
 #include "commandline.h"
+// ESP32 port: state reporting to the public API callback
+#include "xfrpc_events.h"
 #include "health_check.h"
 #include "quic_client_transport.h"
 #include "wire_v2.h"
@@ -60,7 +65,6 @@ static void clear_main_control(void);
 static void start_base_connect(void);
 static void keep_control_alive(void);
 static void client_start_event_cb(struct bufferevent *bev, short what, void *ctx);
-static void reload_check_timer_cb(evutil_socket_t fd, short what, void *ctx);
 static void start_proxy_services(void);
 static int prepare_message(const enum msg_type type, const char *msg,
 			   const size_t msg_len, struct msg_hdr **msg_out,
@@ -90,8 +94,17 @@ static bool is_xfrpc_connected(void)
  */
 static void set_xfrpc_status(bool is_connected)
 {
-	// Set global connection status flag 
+	// Set global connection status flag
 	xfrpc_status = is_connected;
+}
+
+/**
+ * ESP32 port: public API accessor (include/xfrpc.h).
+ * Forwards to the static is_xfrpc_connected().
+ */
+bool xfrpc_is_connected(void)
+{
+	return is_xfrpc_connected();
 }
 
 /**
@@ -1287,7 +1300,10 @@ static int handle_login_response(const uint8_t *buf, int len)
 	}
 
 	is_login = 1;
-	
+
+	// ESP32 port: report login success to the public API callback
+	xfrpc_report_state(XFRPC_STATE_LOGIN_OK);
+
 	int login_len = msg_hton(mhdr->length);
 	int consumed = login_len + sizeof(struct msg_hdr);
 	int remaining_len = len - consumed;
@@ -2085,7 +2101,9 @@ static void start_base_connect()
 	struct common_conf *c_conf = get_common_config();
 	if (!c_conf) {
 		debug(LOG_ERR, "Failed to get common config");
-		exit(1);
+		// ESP32 port: exit(1) → xfrpc_fatal()
+		xfrpc_fatal("no common config");
+		return;
 	}
 
 	// Initialize server connection
@@ -2093,7 +2111,8 @@ static void start_base_connect()
 							 main_ctl->connect_base,
 							 c_conf->server_addr,
 							 c_conf->server_port) != 0) {
-		exit(1);
+		xfrpc_fatal("failed to init server connection");
+		return;
 	}
 
 	/* For QUIC transport, init_server_connection starts an async handshake.
@@ -2108,7 +2127,8 @@ static void start_base_connect()
 	// Setup callbacks for the connection
 	if (setup_server_callbacks(main_ctl->connect_bev) != 0) {
 		bufferevent_free(main_ctl->connect_bev);
-		exit(1);
+		xfrpc_fatal("failed to setup server callbacks");
+		return;
 	}
 }
 
@@ -2249,14 +2269,16 @@ void login(void) {
 	if (wire_protocol_is_v2()) {
 		if (v2_send_login_handshake() != 0) {
 			debug(LOG_ERR, "Failed to send v2 login handshake");
-			exit(1);
+			// ESP32 port: exit(1) → xfrpc_fatal()
+			xfrpc_fatal("failed to send v2 login handshake");
 		}
 		return;
 	}
 
 	if (prepare_login_message(&login_msg, &msg_len) != 0) {
 		debug(LOG_ERR, "Failed to prepare login message");
-		exit(1);
+		xfrpc_fatal("failed to prepare login message");
+		return;
 	}
 
 	send_msg_frp_server(NULL, TypeLogin, login_msg, msg_len, &main_ctl->stream);
@@ -2575,8 +2597,8 @@ void send_enc_msg_frp_server(struct bufferevent *bev,
 				int w = evbuffer_write(tmp, fd);
 				if (w < 0) {
 					if (errno == EAGAIN || errno == EWOULDBLOCK) {
-						struct timespec ts = {0, 10 * 1000 * 1000};
-						nanosleep(&ts, NULL);
+						// ESP32 port: newlib has no nanosleep
+						vTaskDelay(pdMS_TO_TICKS(10));
 						continue;
 					}
 					debug(LOG_ERR, "Failed to write encrypted message: %s",
@@ -2742,7 +2764,12 @@ static int init_event_base(struct control *ctl)
 
 /**
  * @brief Initializes the DNS base for the control structure
- * 
+ *
+ * ESP32 port: lwip DNS is configured by esp_netif (from the WiFi AP's DHCP
+ * lease), and name resolution goes through blocking getaddrinfo in
+ * mini_event's bufferevent_socket_connect_hostname(). The evdns_base is a
+ * stub — no resolv.conf parsing, no fallback servers.
+ *
  * @param ctl Pointer to the control structure
  * @return int Returns 0 on success, -1 on failure
  */
@@ -2752,58 +2779,6 @@ static int init_dns_base(struct control *ctl)
 	if (!dnsbase) {
 		debug(LOG_ERR, "Failed to create DNS base");
 		return -1;
-	}
-
-	// Configure DNS options
-	evdns_base_set_option(dnsbase, "timeout", "1.0");
-	evdns_base_set_option(dnsbase, "randomize-case:", "0"); // Disable DNS-0x20 encoding
-
-	// Try system DNS from multiple locations
-	// OpenWrt stores upstream DNS in /tmp/resolv.conf.d/resolv.conf.auto,
-	// while standard Linux uses /etc/resolv.conf. Try both.
-	static const char *resolv_paths[] = {
-		"/tmp/resolv.conf.d/resolv.conf.auto",  /* OpenWrt upstream DNS */
-		"/tmp/resolv.conf",                       /* OpenWrt alternative */
-		"/etc/resolv.conf",                       /* Standard Linux */
-	};
-
-	int dns_loaded = 0;
-	for (size_t i = 0; i < sizeof(resolv_paths)/sizeof(resolv_paths[0]); i++) {
-		if (access(resolv_paths[i], R_OK) == 0) {
-			if (evdns_base_resolv_conf_parse(dnsbase, DNS_OPTION_NAMESERVERS,
-			                                 resolv_paths[i]) >= 0 &&
-			    evdns_base_count_nameservers(dnsbase) > 0) {
-				debug(LOG_INFO, "Loaded DNS from %s", resolv_paths[i]);
-				dns_loaded = 1;
-				break;
-			}
-		}
-	}
-
-	// Filter out loopback nameservers (127.0.0.x) which point to local
-	// dnsmasq and may not resolve reliably for direct connections.
-	if (dns_loaded) {
-		// libevent does not expose a way to remove individual nameservers,
-		// but evdns_base_resolv_conf_parse skips 127.x automatically.
-		// If only loopback nameservers were found, treat as not loaded.
-		int count = evdns_base_count_nameservers(dnsbase);
-		if (count <= 0) {
-			dns_loaded = 0;
-		}
-	}
-
-	// Fallback to public DNS if system DNS unavailable
-	if (!dns_loaded) {
-		debug(LOG_INFO, "System DNS unavailable, using fallback DNS servers");
-		const char *fallback_dns[] = {
-			"223.5.5.5",       // AliDNS
-			"114.114.114.114", // 114DNS
-			"180.76.76.76",    // Baidu DNS
-		};
-
-		for (size_t i = 0; i < sizeof(fallback_dns)/sizeof(fallback_dns[0]); i++) {
-			evdns_base_nameserver_ip_add(dnsbase, fallback_dns[i]);
-		}
 	}
 
 	ctl->dnsbase = dnsbase;
@@ -2830,30 +2805,25 @@ void init_main_control()
 	main_ctl = calloc(1, sizeof(struct control));
 	if (!main_ctl) {
 		debug(LOG_ERR, "Failed to allocate main control");
-		exit(1);
+		// ESP32 port: exit(1) → xfrpc_fatal()
+		xfrpc_fatal("failed to allocate main control");
+		return;
 	}
 
 	// Initialize event base
 	if (init_event_base(main_ctl) != 0) {
 		free(main_ctl);
 		main_ctl = NULL;
-		exit(1);
+		xfrpc_fatal("failed to init event base");
+		return;
 	}
 
-	/* Schedule periodic SIGHUP reload checker (500ms interval) */
-	main_ctl->reload_timer = evtimer_new(main_ctl->connect_base,
-			reload_check_timer_cb, NULL);
-	if (main_ctl->reload_timer) {
-		struct timeval tv = {0, 500 * 1000}; /* 500ms */
-		evtimer_add(main_ctl->reload_timer, &tv);
-	} else {
-		debug(LOG_ERR, "Failed to create reload timer");
-	}
+	/* ESP32 port: SIGHUP reload checker removed (no signals / config file) */
 
 	// Initialize TCP multiplexing if enabled
 	struct common_conf *c_conf = get_common_config();
 	if (c_conf->tcp_mux) {
-		init_tmux_stream(&main_ctl->stream, get_next_session_id(), INIT);
+		init_tmux_stream(&main_ctl->stream, get_next_session_id(), TMUX_INIT);
 	}
 
 	// Initialize TLS if enabled (must be before any connection attempts)
@@ -2863,7 +2833,8 @@ void init_main_control()
 			event_base_free(main_ctl->connect_base);
 			free(main_ctl);
 			main_ctl = NULL;
-			exit(1);
+			xfrpc_fatal("failed to initialize TLS");
+			return;
 		}
 	}
 
@@ -2877,7 +2848,8 @@ void init_main_control()
 		event_base_free(main_ctl->connect_base);
 		free(main_ctl);
 		main_ctl = NULL;
-		exit(1);
+		xfrpc_fatal("failed to init DNS base");
+		return;
 	}
 }
 
@@ -2940,6 +2912,9 @@ static void clear_main_control()
 	pong_time = 0;
 	v2_session_reset();
 
+	// ESP32 port: report reconnection attempt to the public API callback
+	xfrpc_report_state(XFRPC_STATE_RECONNECTING);
+
 	// Reset TCP mux parser state (static variables in handle_tcp_mux)
 	handle_tcp_mux(NULL, 0, NULL);
 
@@ -2964,7 +2939,7 @@ static void clear_main_control()
         struct common_conf *conf = get_common_config();
         if (conf && conf->tcp_mux) {
                 uint32_t session_id = get_next_session_id();
-                init_tmux_stream(&main_ctl->stream, session_id, INIT);
+                init_tmux_stream(&main_ctl->stream, session_id, TMUX_INIT);
                 debug(LOG_DEBUG, "Reinitialized TCP mux stream with session ID %u", session_id);
         }
 }
@@ -3011,58 +2986,8 @@ static void health_check_result_cb(struct proxy_service *ps, int healthy, void *
 	}
 }
 
-void reload_xfrpc_config(void)
-{
-	const char *config_file = get_config_file();
-	if (!config_file) {
-		debug(LOG_ERR, "Hot-reload failed: no config file path");
-		return;
-	}
-
-	debug(LOG_INFO, "=== SIGHUP received, reloading config from '%s' ===", config_file);
-
-	/* 1. Stop health checks, visitors, and proxy tunnels */
-	health_check_stop_all();
-	free_all_visitor_instances();
-	free_all_visitor_confs();
-	clear_all_proxy_client();
-
-	/* 2. Free old config structures */
-	free_all_proxy_services();
-	free_common_config();
-
-	/* 3. Reload config from file */
-	load_config(config_file);
-
-	/* 4. Re-register proxies with frps (if connected) */
-	if (is_xfrpc_connected()) {
-		start_proxy_services();
-	}
-
-	debug(LOG_INFO, "=== Hot-reload complete ===");
-}
-
-/**
- * @brief Periodic timer callback that checks for pending SIGHUP reload.
- *
- * Runs every 500ms to minimize signal-to-reload latency while keeping
- * overhead negligible.
- */
-static void reload_check_timer_cb(evutil_socket_t fd, short what, void *ctx)
-{
-	(void)fd; (void)what;
-
-	if (check_reload_flag()) {
-		clear_reload_flag();
-		reload_xfrpc_config();
-	}
-
-	/* Re-arm the timer for the next check */
-	if (main_ctl && main_ctl->reload_timer) {
-		struct timeval tv = {0, 500 * 1000}; /* 500ms */
-		evtimer_add(main_ctl->reload_timer, &tv);
-	}
-}
+/* ESP32 port: reload_xfrpc_config() / reload_check_timer_cb() removed —
+ * there is no SIGHUP and no config file (API-only configuration). */
 
 void close_main_control()
 {

@@ -13,6 +13,12 @@
 #  error "Endianness is undefined"
 #endif
 
+#elif defined(__XTENSA__) || defined(__riscv)
+/* ESP32 port: newlib endian.h macros are not reliable; both supported
+ * targets are little-endian. */
+#  define	htole16(x) (x)
+#  define	le32toh(x) (x)
+#  define	__LITTLE_ENDIAN__ 1
 
 #elif !defined(__WIN32__)
 #  include <endian.h>

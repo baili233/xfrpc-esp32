@@ -68,22 +68,26 @@ void init_login()
 	if (!c_login) {
 		c_login = calloc(sizeof(struct login), 1);
 		if (!c_login) {
+			// ESP32 port: exit(1) → xfrpc_fatal()
 			debug(LOG_ERR, "Failed to allocate memory for login structure");
-			exit(1);
+			xfrpc_fatal("failed to allocate login structure");
+			return;
 		}
 	}
 
 	struct common_conf *c_conf = get_common_config();
 	if (!c_conf) {
 		debug(LOG_ERR, "Failed to get common config");
-		exit(1);
+		xfrpc_fatal("no common config");
+		return;
 	}
 
 	// Get system information
 	struct utsname uname_buf;
 	if (uname(&uname_buf) != 0) {
 		debug(LOG_ERR, "Failed to get system information");
-		exit(1);
+		xfrpc_fatal("uname() failed");
+		return;
 	}
 
 	// Initialize basic fields
@@ -93,7 +97,8 @@ void init_login()
 
 	if (!c_login->version || !c_login->os || !c_login->arch) {
 		debug(LOG_ERR, "Failed to allocate memory for login fields");
-		exit(1);
+		xfrpc_fatal("failed to allocate login fields");
+		return;
 	}
 
 	// Initialize other fields with default values
@@ -111,10 +116,12 @@ void init_login()
 	c_login->logged = 0;
 
 	// Get network interface information
+	// ESP32 port: get_net_ifname() always succeeds with the station ifname
 	char ifname[16] = {0};
 	if (get_net_ifname(ifname, sizeof(ifname)) != 0) {
 		debug(LOG_ERR, "Failed to get network interface name");
-		exit(1);
+		xfrpc_fatal("get_net_ifname failed");
+		return;
 	}
 
 	// Check if device is a router
@@ -127,13 +134,15 @@ void init_login()
 	char if_mac[64] = {0};
 	if (get_net_mac(ifname, if_mac, sizeof(if_mac)) != 0) {
 		debug(LOG_ERR, "Failed to get MAC address for interface %s", ifname);
-		exit(1);
+		xfrpc_fatal("get_net_mac failed");
+		return;
 	}
 
 	c_login->run_id = strdup(if_mac);
 	if (!c_login->run_id) {
 		debug(LOG_ERR, "Failed to allocate memory for run_id");
-		exit(1);
+		xfrpc_fatal("failed to allocate run_id");
+		return;
 	}
 }
 

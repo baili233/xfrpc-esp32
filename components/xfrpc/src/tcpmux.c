@@ -159,7 +159,7 @@ void init_tmux_stream(struct tmux_stream *stream, uint32_t id, enum tcp_mux_stat
         return;
     }
 
-    if (state > RESET) {
+    if (state > TMUX_RESET) {
         debug(LOG_ERR, "Invalid stream state: %d", state);
         return;
     }
@@ -455,29 +455,29 @@ static int process_flags(uint16_t flags, struct tmux_stream *stream) {
     bool should_close = false;
 
     if (flags & ACK) {
-        if (stream->state == SYN_SEND) {
-            stream->state = ESTABLISHED;
+        if (stream->state == TMUX_SYN_SEND) {
+            stream->state = TMUX_ESTABLISHED;
         }
     }
 
     if (flags & FIN) {
         switch (stream->state) {
-            case SYN_SEND:
-            case SYN_RECEIVED:
-            case ESTABLISHED:
-                stream->state = REMOTE_CLOSE;
+            case TMUX_SYN_SEND:
+            case TMUX_SYN_RECEIVED:
+            case TMUX_ESTABLISHED:
+                stream->state = TMUX_REMOTE_CLOSE;
                 break;
-            case LOCAL_CLOSE:
-                stream->state = CLOSED;
+            case TMUX_LOCAL_CLOSE:
+                stream->state = TMUX_CLOSED;
                 should_close = true;
                 break;
-            case INIT:
-                debug(LOG_WARNING, "FIN received in INIT state for stream %d, treating as reset", stream->id);
-                stream->state = RESET;
+            case TMUX_INIT:
+                debug(LOG_WARNING, "FIN received in TMUX_INIT state for stream %d, treating as reset", stream->id);
+                stream->state = TMUX_RESET;
                 should_close = true;
                 break;
-            case CLOSED:
-            case RESET:
+            case TMUX_CLOSED:
+            case TMUX_RESET:
                 debug(LOG_DEBUG, "FIN received in terminal state %d for stream %d, ignoring", stream->state, stream->id);
                 return 1;
             default:
@@ -487,7 +487,7 @@ static int process_flags(uint16_t flags, struct tmux_stream *stream) {
     }
 
     if (flags & RST) {
-        stream->state = RESET;
+        stream->state = TMUX_RESET;
         should_close = true;
     }
 
@@ -510,13 +510,13 @@ static enum tcp_mux_flag get_send_flags(struct tmux_stream *stream) {
     }
 
     switch (stream->state) {
-        case INIT:
+        case TMUX_INIT:
             flags |= SYN;
-            stream->state = SYN_SEND;
+            stream->state = TMUX_SYN_SEND;
             break;
-        case SYN_RECEIVED:
+        case TMUX_SYN_RECEIVED:
             flags |= ACK;
-            stream->state = ESTABLISHED;
+            stream->state = TMUX_ESTABLISHED;
             break;
         default:
             break;
@@ -694,7 +694,7 @@ int process_data(struct bufferevent *bev, struct tmux_stream *stream,
               (pc && pc->ps && pc->ps->proxy_type) ? pc->ps->proxy_type : "null",
               (pc && pc->ps) ? pc->ps->service_type : -1);
         tcp_mux_send_win_update_rst(bout, stream->id);
-        stream->state = LOCAL_CLOSE;
+        stream->state = TMUX_LOCAL_CLOSE;
     } else {
         send_window_update(bout, stream, bytes_processed);
     }
@@ -901,7 +901,7 @@ int tmux_stream_write(struct bufferevent *bev,
         return -2;
     }
 
-    if (stream->state == LOCAL_CLOSE || stream->state == CLOSED || stream->state == RESET) {
+    if (stream->state == TMUX_LOCAL_CLOSE || stream->state == TMUX_CLOSED || stream->state == TMUX_RESET) {
         debug(LOG_INFO, "stream %d state is closed", stream->id);
         return -1;
     }
@@ -968,18 +968,18 @@ int tmux_stream_close(struct bufferevent *bout, struct tmux_stream *stream) {
     uint8_t should_close = 0;
 
     switch (stream->state) {
-        case SYN_SEND:
-        case SYN_RECEIVED:
-        case ESTABLISHED:
-            stream->state = LOCAL_CLOSE;
+        case TMUX_SYN_SEND:
+        case TMUX_SYN_RECEIVED:
+        case TMUX_ESTABLISHED:
+            stream->state = TMUX_LOCAL_CLOSE;
             break;
-        case LOCAL_CLOSE:
-        case REMOTE_CLOSE:
+        case TMUX_LOCAL_CLOSE:
+        case TMUX_REMOTE_CLOSE:
             should_close = 1;
-            stream->state = CLOSED;
+            stream->state = TMUX_CLOSED;
             break;
-        case CLOSED:
-        case RESET:
+        case TMUX_CLOSED:
+        case TMUX_RESET:
         default:
             return 0;
     }

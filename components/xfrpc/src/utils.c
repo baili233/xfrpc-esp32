@@ -2,189 +2,129 @@
 // SPDX-License-Identifier: GPL-3.0-only
 /*
  * Copyright (c) 2023 Dengfeng Liu <liudf0716@gmail.com>
+ *
+ * ESP32 port: Linux net/if.h / sys/ioctl.h / ifaddrs.h code replaced with
+ * esp_netif / esp_read_mac based implementations.
  */
 
 #include <stdlib.h>
 #include <stdio.h>
-#include <unistd.h>
 #include <string.h>
-#include <fcntl.h>
-#include <arpa/inet.h>
-#include <sys/time.h>
-#include <sys/stat.h>
-#include <errno.h>
 #include <ctype.h>
-
-#include <net/if.h>
-#include <sys/ioctl.h>
-#include <arpa/inet.h>
-#include <sys/socket.h>
-#include <netdb.h>
-#include <ifaddrs.h>
-#include <linux/if_link.h>
 #include <stdbool.h>
+// ESP32 port: lwip's arpa/inet.h does not pull in the socket headers
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
+// ESP32 port: replaced Linux net/if.h, sys/ioctl.h, ifaddrs.h
+#include <esp_mac.h>
+#include <esp_netif.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #include "utils.h"
 
 /**
- * High precision sleep function using select
- * 
- * This function provides a more precise sleep mechanism than standard sleep()
- * by using select() system call. It can sleep for specified seconds and microseconds.
+ * High precision sleep function
+ *
+ * ESP32 port: lwip select() with no fds is unreliable — use vTaskDelay.
  *
  * @param s Number of seconds to sleep
  * @param u Number of microseconds to sleep (1 second = 1,000,000 microseconds)
  */
 void s_sleep(unsigned int s, unsigned int u)
 {
-	struct timeval timeout;
-	timeout.tv_sec = s;
-	timeout.tv_usec = u;
-	select(0, NULL, NULL, NULL, &timeout);
+	uint64_t ms = (uint64_t)s * 1000U + (u + 999U) / 1000U;
+	if (ms == 0)
+		ms = 1;
+	vTaskDelay(pdMS_TO_TICKS((uint32_t)ms));
 }
 
 /**
  * Validates IPv4 address string format
- * 
+ *
  * This function checks if the given string represents a valid IPv4 address
  * in dotted decimal notation (e.g., "192.168.1.1").
  *
  * @param ip_address String containing the IP address to validate
  * @return 1 if address is valid, 0 if invalid
  */
-int is_valid_ip_address(const char *ip_address) 
+int is_valid_ip_address(const char *ip_address)
 {
 	if (!ip_address) {
 		return 0;
 	}
-	
+
 	struct sockaddr_in sa;
 	return inet_pton(AF_INET, ip_address, &(sa.sin_addr));
 }
 
 /**
- * Gets the MAC address of a specified network interface
- * 
- * This function retrieves the hardware (MAC) address of a network interface
- * and formats it as a string of uppercase hexadecimal digits.
+ * Gets the MAC address of the WiFi station interface
  *
- * @param net_if_name Name of network interface (e.g., "br-lan", "eth0")
+ * ESP32 port: uses the eFuse base MAC (esp_read_mac); the interface name
+ * argument is accepted for API compatibility but ignored.
+ *
+ * @param net_if_name Name of network interface (ignored)
  * @param mac Output buffer to store MAC address string
  * @param mac_len Length of output buffer (must be >= 13 bytes for MAC XXYYZZAABBCC)
  * @return 0 on success, 1 on error (invalid parameters or system calls failed)
  */
-int get_net_mac(const char *net_if_name, char *mac, int mac_len) 
+int get_net_mac(const char *net_if_name, char *mac, int mac_len)
 {
-	struct ifreq ifreq;
-	int sock;
+	uint8_t base_mac[6] = {0};
 
 	// Validate input parameters: 12 hex chars + 1 null terminator = 13 bytes minimum
-	if (!net_if_name || !mac || mac_len < 13) {
+	if (!mac || mac_len < 13) {
 		return 1;
 	}
 
-	// Create socket for interface communication
-	sock = socket(AF_INET, SOCK_STREAM, 0);
-	if (sock < 0) {
-		perror("socket creation failed");
-		return 1;
-	}
+	(void)net_if_name;
 
-	// Prepare interface request structure
-	memset(&ifreq, 0, sizeof(ifreq));
-	strncpy(ifreq.ifr_name, net_if_name, IFNAMSIZ - 1);
-
-	// Get hardware address
-	if (ioctl(sock, SIOCGIFHWADDR, &ifreq) < 0) {
-		perror("ioctl SIOCGIFHWADDR failed");
-		close(sock);
+	if (esp_read_mac(base_mac, ESP_MAC_WIFI_STA) != ESP_OK) {
 		return 1;
 	}
 
 	// Format MAC address as string
 	for (int i = 0; i < 6; i++) {
-		snprintf(mac + (i * 2), mac_len - (i * 2), "%02X", 
-				(unsigned char)ifreq.ifr_hwaddr.sa_data[i]);
+		snprintf(mac + (i * 2), mac_len - (i * 2), "%02X", base_mac[i]);
 	}
-
-	close(sock);
 	return 0;
 }
 
 /**
- * Displays information about all network interfaces on the system
- * 
- * This function prints details for each network interface including:
- * - Interface name
- * - Address family (AF_PACKET, AF_INET, AF_INET6)
- * - IP address (for AF_INET/AF_INET6 interfaces)
- * - Packet statistics (for AF_PACKET interfaces)
+ * Displays information about the network interface
+ *
+ * ESP32 port: prints the station interface IP if available.
  *
  * @return Number of interfaces found, or -1 on error
  */
 int show_net_ifname()
 {
-	struct ifaddrs *ifaddr = NULL, *ifa = NULL;
-	int family, s, n = 0;
-	char host[NI_MAXHOST];
-
-	if (getifaddrs(&ifaddr) == -1) {
-		perror("getifaddrs");
+	esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+	if (!netif) {
+		printf("no STA netif\n");
 		return -1;
 	}
 
-	for (ifa = ifaddr, n = 0; ifa != NULL; ifa = ifa->ifa_next, n++) {
-		if (ifa->ifa_addr == NULL)
-			continue;
-
-		family = ifa->ifa_addr->sa_family;
-
-		// Display interface name and address family
-		printf("%-8s %s (%d)\n",
-			   ifa->ifa_name,
-			   (family == AF_PACKET) ? "AF_PACKET" :
-			   (family == AF_INET) ? "AF_INET" :
-			   (family == AF_INET6) ? "AF_INET6" : "???",
-			   family);
-
-		// Handle IP addresses
-		if (family == AF_INET || family == AF_INET6) {
-			s = getnameinfo(ifa->ifa_addr,
-						  (family == AF_INET) ? sizeof(struct sockaddr_in) :
-											  sizeof(struct sockaddr_in6),
-						  host, NI_MAXHOST,
-						  NULL, 0, NI_NUMERICHOST);
-			if (s != 0) {
-				fprintf(stderr, "getnameinfo() failed: %s\n", gai_strerror(s));
-				freeifaddrs(ifaddr);
-				return -1;
-			}
-			printf("\t\taddress: <%s>\n", host);
-		}
-		// Handle packet statistics
-		else if (family == AF_PACKET && ifa->ifa_data != NULL) {
-			struct rtnl_link_stats *stats = (struct rtnl_link_stats *)ifa->ifa_data;
-			printf("\t\ttx_packets = %10u; rx_packets = %10u\n"
-				   "\t\ttx_bytes   = %10u; rx_bytes   = %10u\n",
-				   stats->tx_packets, stats->rx_packets,
-				   stats->tx_bytes, stats->rx_bytes);
-		}
+	char ip[16] = {0};
+	esp_netif_ip_info_t ip_info;
+	if (esp_netif_get_ip_info(netif, &ip_info) == ESP_OK) {
+		esp_ip4addr_ntoa(&ip_info.ip, ip, sizeof(ip));
 	}
-
-	freeifaddrs(ifaddr);
-	return n;
+	printf("sta (AF_INET)\n\t\taddress: <%s>\n", ip);
+	return 1;
 }
 
 /**
  * Gets the primary network interface name of the system
- * 
- * This function attempts to find the primary network interface name by:
- * 1. First looking for common router interfaces (br-lan or br0)
- * 2. Falling back to first non-loopback interface if router interfaces not found
+ *
+ * ESP32 port: always returns "sta" (the WiFi station netif).
  *
  * @param if_buf Output buffer to store interface name
  * @param blen Length of output buffer (must be >= 8 bytes)
- * @return 0 on success, -1 on invalid parameters, 1 if no interface found
+ * @return 0 on success, -1 on invalid parameters
  */
 int get_net_ifname(char *if_buf, int blen)
 {
@@ -193,53 +133,14 @@ int get_net_ifname(char *if_buf, int blen)
 		return -1;
 	}
 
-	struct ifaddrs *ifaddr = NULL, *ifa = NULL;
-	int family;
-	char backup_ifname[IFNAMSIZ] = {0};
-	
-	if (getifaddrs(&ifaddr) == -1) {
-		perror("getifaddrs");
-		return 1;
-	}
-
-	// Iterate through all interfaces
-	for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
-		if (ifa->ifa_addr == NULL) {
-			continue;
-		}
-
-		family = ifa->ifa_addr->sa_family;
-
-		if (family == AF_INET) {
-			// Check for router specific interfaces
-			if (strcmp(ifa->ifa_name, "br-lan") == 0 || 
-				strcmp(ifa->ifa_name, "br0") == 0) {
-				strncpy(if_buf, ifa->ifa_name, blen);
-				freeifaddrs(ifaddr);
-				return 0;
-			}
-		} else if (family == AF_PACKET && 
-				  ifa->ifa_data != NULL && 
-				  strcmp(ifa->ifa_name, "lo") != 0) {
-			// Store first non-loopback interface as backup
-			strncpy(backup_ifname, ifa->ifa_name, IFNAMSIZ-1);
-		}
-	}
-
-	// Use backup interface if router interfaces not found
-	if (backup_ifname[0] != '\0') {
-		strncpy(if_buf, backup_ifname, blen);
-		freeifaddrs(ifaddr);
-		return 0;
-	}
-
-	freeifaddrs(ifaddr);
-	return 1;
+	strncpy(if_buf, "sta", blen - 1);
+	if_buf[blen - 1] = '\0';
+	return 0;
 }
 
 /**
  * Converts domain name to lowercase and validates format
- * 
+ *
  * This function takes a domain name string and:
  * 1. Converts all characters to lowercase until '/' is encountered
  * 2. Validates that the domain has at least one dot (.)

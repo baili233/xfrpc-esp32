@@ -12,9 +12,8 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
-#include <sys/un.h>
 #include <syslog.h>
-#include <zlib.h>
+// ESP32 port: removed <zlib.h>, <sys/un.h> (no AF_UNIX in lwip)
 
 
 #include "debug.h"
@@ -22,7 +21,6 @@
 #include "uthash.h"
 #include "control.h"
 #include "config.h"
-#include "zip.h"
 #include "common.h"
 #include "proxy.h"
 #include "utils.h"
@@ -272,57 +270,14 @@ static void setup_proxy_callbacks(struct proxy_client *client,
 /**
  * @brief Connect to a local Unix Domain Socket
  *
- * Creates a non-blocking connection to a Unix domain socket at the given path.
- * Returns a bufferevent connected to the socket, or NULL on failure.
+ * ESP32 port: lwip has no AF_UNIX — always fails. Unix-socket plugins are
+ * not supported on this platform.
  */
 static struct bufferevent *connect_unix_server(struct event_base *base, const char *unix_path)
 {
-	if (!base || !unix_path) {
-		debug(LOG_ERR, "Invalid parameters for Unix socket connection");
-		return NULL;
-	}
-
-	/* Create Unix socket */
-	int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-	if (fd < 0) {
-		debug(LOG_ERR, "Failed to create Unix socket: %s", strerror(errno));
-		return NULL;
-	}
-
-	/* Set non-blocking */
-	evutil_make_socket_nonblocking(fd);
-
-	/* Connect to Unix socket */
-	struct sockaddr_un sun;
-	memset(&sun, 0, sizeof(sun));
-	sun.sun_family = AF_UNIX;
-	strncpy(sun.sun_path, unix_path, sizeof(sun.sun_path) - 1);
-
-	int ret = connect(fd, (struct sockaddr *)&sun, sizeof(sun));
-	if (ret < 0 && errno != EINPROGRESS) {
-		debug(LOG_ERR, "Failed to connect to Unix socket %s: %s", unix_path, strerror(errno));
-		close(fd);
-		return NULL;
-	}
-
-	/* Create bufferevent */
-	struct bufferevent *bev = bufferevent_socket_new(base, fd, BEV_OPT_CLOSE_ON_FREE);
-	if (!bev) {
-		debug(LOG_ERR, "Failed to create bufferevent for Unix socket");
-		close(fd);
-		return NULL;
-	}
-
-	/* For non-blocking connect, the BEV_EVENT_CONNECTED callback will fire */
-	if (ret == 0) {
-		/* Connected immediately */
-		debug(LOG_DEBUG, "Connected to Unix socket: %s", unix_path);
-	} else {
-		/* EINPROGRESS — will connect asynchronously */
-		debug(LOG_DEBUG, "Connecting to Unix socket: %s", unix_path);
-	}
-
-	return bev;
+	(void)base; (void)unix_path;
+	debug(LOG_ERR, "Unix domain sockets not supported on ESP32");
+	return NULL;
 }
 
 /**
@@ -624,7 +579,7 @@ struct proxy_client *new_proxy_client()
 
 	client->stream_id = get_next_session_id();
 	
-	init_tmux_stream(&client->stream, client->stream_id, INIT);
+	init_tmux_stream(&client->stream, client->stream_id, TMUX_INIT);
 
 	HASH_ADD_INT(all_pc, stream_id, client);
 	debug(LOG_DEBUG, "Created new proxy client with stream ID: %d", client->stream_id);

@@ -76,8 +76,10 @@ struct common_conf {
 
 /* Configuration management functions */
 struct common_conf *get_common_config(void);
+struct common_conf *init_common_config(void); /* ESP32 port: API config entry */
 void free_common_config(void);
 void load_config(const char *confile);
+int validate_heartbeat_config(void);
 
 /* Proxy service management functions */
 struct proxy_service *get_proxy_service(const char *proxy_name);
@@ -86,7 +88,9 @@ void free_proxy_service(struct proxy_service *ps);
 void free_all_proxy_services(void);
 int validate_proxy(struct proxy_service *ps);
 
-/* Visitor section parser (called from INI handler) */
-int parse_visitor_section(const char *section_name, const char *key, const char *value);
+/* ESP32 port: register a proxy service from the public API configuration */
+struct proxy_service *config_add_proxy_service(const char *name,
+	const char *proxy_type, const char *local_ip, int local_port,
+	int remote_port, int use_encryption, int use_compression);
 
 #endif //XFRPC_CONFIG_H

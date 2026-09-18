@@ -24,12 +24,15 @@
 #include "crypto.h"
 #include "msg.h"
 #include "utils.h"
-#include "tcp_redir.h"
 
+// ESP32 port: plugins and tcp_redir are optional (CONFIG_XFRPC_ENABLE_PLUGINS)
+#ifdef CONFIG_XFRPC_ENABLE_PLUGINS
+#include "tcp_redir.h"
 #include "plugins/youtubedl.h"
 #include "plugins/telnetd.h"
 #include "plugins/instaloader.h"
 #include "plugins/httpd.h"
+#endif
 
 /**
  * @brief Starts local services based on proxy service configurations
@@ -51,6 +54,7 @@ static void start_xfrpc_local_service(void)
 		if (!ps->plugin)
 			continue;
 
+#ifdef CONFIG_XFRPC_ENABLE_PLUGINS
 		if (strcmp(ps->plugin, "telnetd") == 0) {
 			simple_telnetd_start(ps->local_port);
 		} else if (strcmp(ps->plugin, "instaloader") == 0) {
@@ -61,7 +65,9 @@ static void start_xfrpc_local_service(void)
 			start_tcp_redir_service(ps);
 		} else if (strcmp(ps->plugin, "httpd") == 0) {
 			start_httpd_service(ps);
-		} else {
+		} else
+#endif
+		{
 			debug(LOG_ERR, "start_xfrpc_local_service: unknown plugin %s", ps->plugin);
 		}
 	}

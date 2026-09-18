@@ -54,14 +54,14 @@ struct tcp_mux_flag_desc {
 };
 
 enum tcp_mux_state {
-    INIT = 0,
-    SYN_SEND,
-    SYN_RECEIVED,
-    ESTABLISHED,
-    LOCAL_CLOSE,
-    REMOTE_CLOSE,
-    CLOSED,
-    RESET
+    TMUX_INIT = 0,
+    TMUX_SYN_SEND,
+    TMUX_SYN_RECEIVED,
+    TMUX_ESTABLISHED,
+    TMUX_LOCAL_CLOSE,
+    TMUX_REMOTE_CLOSE,
+    TMUX_CLOSED,
+    TMUX_RESET
 };
 
 struct tmux_stream {

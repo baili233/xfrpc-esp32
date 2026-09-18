@@ -269,7 +269,7 @@ void handle_socks5(struct proxy_client *client, struct bufferevent *bev, uint32_
 
 			if (buf[0] != 0x05) {
 				debug(LOG_ERR, "Unsupported SOCKS version: 0x%02x", buf[0]);
-				client->state = CLOSED;
+				client->state = TMUX_CLOSED;
 				return;
 			}
 
@@ -307,7 +307,7 @@ void handle_socks5(struct proxy_client *client, struct bufferevent *bev, uint32_
 			if (buf[0] != 0x05 || buf[1] != 0x01 || buf[2] != 0x00) {
 				debug(LOG_ERR, "Invalid SOCKS5 request header: %02x %02x %02x", 
 				      buf[0], buf[1], buf[2]);
-				client->state = CLOSED;
+				client->state = TMUX_CLOSED;
 				return;
 			}
 

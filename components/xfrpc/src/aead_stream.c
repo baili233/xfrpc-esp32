@@ -2,6 +2,7 @@
 
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 #include "ssl_compat.h"
 #include <openssl/hmac.h>
