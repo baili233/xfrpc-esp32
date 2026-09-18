@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# xfrpc ESP32 component configuration
+
+menu "xfrpc"
+
+config XFRPC_TASK_STACK_SIZE
+    int "xfrpc task stack size (bytes)"
+    default 16384
+    help
+        Stack size of the FreeRTOS task that runs the xfrpc event loop
+        (mini-libevent + all proxy callbacks). 16 KB is a safe start;
+        check uxTaskGetStackHighWaterMark() before shrinking.
+
+config XFRPC_TASK_PRIORITY
+    int "xfrpc task priority"
+    default 5
+    help
+        Priority of the xfrpc event loop task.
+
+config XFRPC_LOG_LEVEL
+    int "xfrpc log level (syslog style, 0=emerg .. 7=debug)"
+    default 6
+    range 0 7
+    help
+        Messages with a level above this are dropped.
+        3 = errors only, 6 = info, 7 = full debug.
+
+# Feature trimming:
+#
+# TCP proxy / AES encryption / snappy compression / tcp_mux are the frp
+# protocol MVP core and are always compiled in (frps defaults require
+# them). Runtime trimming is available via the API:
+#   .tcp_mux = 0, .use_encryption = 0, .use_compression = 0.
+#
+# Compile-time Kconfig switches for optional modules (TLS, wire v2,
+# UDP proxy, visitor, xtcp, plugins) are planned once the corresponding
+# sources are ported (see README "Roadmap").
+
+endmenu
