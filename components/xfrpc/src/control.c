@@ -18,6 +18,9 @@
 #include <unistd.h>
 #include <time.h>
 #include <stdbool.h>
+
+// ESP32 port: optional-module switches (CONFIG_XFRPC_ENABLE_WIRE_V2)
+#include "sdkconfig.h"
 // ESP32 port: vTaskDelay replaces nanosleep (newlib has no implementation)
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -44,7 +47,9 @@
 #include "health_check.h"
 #include "quic_client_transport.h"
 #include "wire_v2.h"
+#if defined(CONFIG_XFRPC_ENABLE_WIRE_V2)
 #include "aead_stream.h"
+#endif
 
 static struct control *main_ctl;
 static bool xfrpc_status;
@@ -52,12 +57,14 @@ static int is_login;
 static time_t pong_time;
 static volatile int g_reconnect_requested;
 
+#if defined(CONFIG_XFRPC_ENABLE_WIRE_V2)
 static uint8_t *v2_ch_json;
 static size_t v2_ch_json_len;
 static int v2_got_hello;
 static int v2_aead_ready;
 static struct aead_writer v2_aw;
 static struct aead_reader v2_ar;
+#endif
 
 static void new_work_connection(struct bufferevent *bev, struct tmux_stream *stream);
 static void recv_cb(struct bufferevent *bev, void *ctx);
@@ -225,8 +232,8 @@ static void client_start_event_cb(struct bufferevent *bev, short what, void *ctx
 
 	// Handle connection errors and EOF
 	if (what & (BEV_EVENT_EOF|BEV_EVENT_ERROR)) {
-		if (tls_is_enabled()) {
-			tls_log_errors("TLS work connection");
+		if (xfrpc_tls_is_enabled()) {
+			xfrpc_tls_log_errors("TLS work connection");
 		}
 		handle_client_error(client, bev, c_conf);
 		return;
@@ -630,17 +637,17 @@ struct bufferevent *connect_server(struct event_base *base, const char *name, co
 
 	// Wrap with TLS if enabled AND target is the frps server
 	{
-		int _tls_on = tls_is_enabled();
-		debug(LOG_DEBUG, "TLS check: tls_is_enabled=%d, name=%s, port=%d", _tls_on, name, port);
+		int _tls_on = xfrpc_tls_is_enabled();
+		debug(LOG_DEBUG, "TLS check: is_enabled=%d, name=%s, port=%d", _tls_on, name, port);
 	}
-	if (tls_is_enabled()) {
+	if (xfrpc_tls_is_enabled()) {
 		struct common_conf *c_conf = get_common_config();
 		if (c_conf && strcmp(name, c_conf->server_addr) == 0 && port == c_conf->server_port) {
 			debug(LOG_DEBUG, "TLS wrapping connection to %s:%d", name, port);
-			struct bufferevent *ssl_bev = tls_wrap_bev(base, bev);
+			struct bufferevent *ssl_bev = xfrpc_tls_wrap_bev(base, bev);
 			if (!ssl_bev) {
 				debug(LOG_ERR, "Failed to wrap connection with TLS");
-				/* bev was consumed/freed by tls_wrap_bev on failure */
+				/* bev was consumed/freed by xfrpc_tls_wrap_bev on failure */
 				return NULL;
 			}
 			return ssl_bev;
@@ -1337,6 +1344,8 @@ static int handle_login_response(const uint8_t *buf, int len)
  * @details This function processes incoming messages from the frps (frp server)
  *          and performs appropriate handling based on the message content
  */
+#if defined(CONFIG_XFRPC_ENABLE_WIRE_V2)
+
 static int v2_buf_append(uint8_t **buf, size_t *len, size_t *cap,
 			 const uint8_t *p, size_t n)
 {
@@ -1489,17 +1498,27 @@ static void v2_handle_bytes(uint8_t *buf, int len, void *ctx)
 	v2_consume_plain_frames(st, ctx);
 }
 
-static void handle_frps_msg(uint8_t *buf, int len, void *ctx) 
+#else /* !CONFIG_XFRPC_ENABLE_WIRE_V2 */
+
+/* wire_v2.c / aead_stream.c are not compiled into this build and
+ * wire_protocol_is_v2() is a constant 0, so the call sites below are
+ * compiled out. Nothing else may reference the v2 helpers. */
+
+#endif /* CONFIG_XFRPC_ENABLE_WIRE_V2 */
+
+static void handle_frps_msg(uint8_t *buf, int len, void *ctx)
 {
 	if (!buf || len <= 0) {
 		debug(LOG_ERR, "Invalid message buffer or length");
 		return;
 	}
 
+#if defined(CONFIG_XFRPC_ENABLE_WIRE_V2)
 	if (wire_protocol_is_v2()) {
 		v2_handle_bytes(buf, len, ctx);
 		return;
 	}
+#endif
 
 	if (!is_login) {
 		if (!handle_login_response(buf, len)) {
@@ -1859,7 +1878,7 @@ static void handle_connection_success(struct bufferevent *bev) {
 	login();
 	
 	// Flush TLS output buffer
-	if (tls_is_enabled()) {
+	if (xfrpc_tls_is_enabled()) {
 		bufferevent_flush(bev, EV_WRITE, BEV_FLUSH);
 	}
 	
@@ -1891,9 +1910,9 @@ static void connect_event_cb(struct bufferevent *bev, short what, void *ctx)
 	}
 
 	if (what & (BEV_EVENT_EOF|BEV_EVENT_ERROR)) {
-		debug(LOG_DEBUG, "connect_event_cb error: what=0x%x, tls=%d", what, tls_is_enabled());
-		if (tls_is_enabled()) {
-			tls_log_errors("TLS connection");
+		debug(LOG_DEBUG, "connect_event_cb error: what=0x%x, tls=%d", what, xfrpc_tls_is_enabled());
+		if (xfrpc_tls_is_enabled()) {
+			xfrpc_tls_log_errors("TLS connection");
 		}
 		unsigned long ssl_err;
 		while ((ssl_err = ERR_get_error()) != 0) {
@@ -2159,15 +2178,8 @@ static int prepare_login_message(char **msg_out, int *len_out) {
 	return 0;
 }
 
-/**
- * @brief Handles the user login process in xfrpc
- *
- * This function manages the authentication process for users connecting
- * to the xfrp client. It establishes a connection and performs the
- * necessary login handshake with the server.
- *
- * @note This function does not take any parameters and does not return a value
- */
+#if defined(CONFIG_XFRPC_ENABLE_WIRE_V2)
+
 static int v2_write_bytes(struct bufferevent *bev, struct tmux_stream *stream,
 			  const uint8_t *data, size_t len)
 {
@@ -2262,10 +2274,23 @@ static int v2_send_login_handshake(void)
 	return rc;
 }
 
+#else /* !CONFIG_XFRPC_ENABLE_WIRE_V2 */
+
+/* wire_v2.c / aead_stream.c are not compiled into this build and
+ * wire_protocol_is_v2() is a constant 0 (port/wire_v2_off.c), so every v2
+ * call site above is compiled out. Only the reset hook is shared. */
+
+static void v2_session_reset(void)
+{
+}
+
+#endif /* CONFIG_XFRPC_ENABLE_WIRE_V2 */
+
 void login(void) {
 	char *login_msg = NULL;
 	int msg_len = 0;
 
+#if defined(CONFIG_XFRPC_ENABLE_WIRE_V2)
 	if (wire_protocol_is_v2()) {
 		if (v2_send_login_handshake() != 0) {
 			debug(LOG_ERR, "Failed to send v2 login handshake");
@@ -2274,6 +2299,7 @@ void login(void) {
 		}
 		return;
 	}
+#endif
 
 	if (prepare_login_message(&login_msg, &msg_len) != 0) {
 		debug(LOG_ERR, "Failed to prepare login message");
@@ -2347,6 +2373,7 @@ void send_msg_frp_server(struct bufferevent *bev,
 		return;
 	}
 
+	#if defined(CONFIG_XFRPC_ENABLE_WIRE_V2)
 	if (wire_protocol_is_v2()) {
 		uint8_t *frame = NULL;
 		size_t flen = 0;
@@ -2381,6 +2408,7 @@ void send_msg_frp_server(struct bufferevent *bev,
 		free(req_msg);
 		return;
 	}
+#endif
 
 	// Send message based on mux configuration
 	struct common_conf *c_conf = get_common_config();
@@ -2532,6 +2560,7 @@ void send_enc_msg_frp_server(struct bufferevent *bev,
 		return;
 	}
 
+	#if defined(CONFIG_XFRPC_ENABLE_WIRE_V2)
 	if (wire_protocol_is_v2()) {
 		uint8_t *frame = NULL;
 		size_t flen = 0;
@@ -2549,6 +2578,7 @@ void send_enc_msg_frp_server(struct bufferevent *bev,
 		free(sealed);
 		return;
 	}
+#endif
 
 	// Initialize encoder if needed
 	if (!get_main_encoder() && initialize_encoder(bout, stream) != 0) {
@@ -2828,7 +2858,7 @@ void init_main_control()
 
 	// Initialize TLS if enabled (must be before any connection attempts)
 	if (c_conf->tls_enable) {
-		if (tls_init() != 0) {
+		if (xfrpc_tls_init() != 0) {
 			debug(LOG_ERR, "Failed to initialize TLS");
 			event_base_free(main_ctl->connect_base);
 			free(main_ctl);
@@ -3011,7 +3041,7 @@ void close_main_control()
 	}
 
 	// Cleanup TLS context
-	tls_cleanup();
+	xfrpc_tls_cleanup();
 
 	// Free the main control structure
 	free_main_control();

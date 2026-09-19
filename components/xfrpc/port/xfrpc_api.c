@@ -110,13 +110,33 @@ int xfrpc_start(const xfrpc_client_config_t *cfg,
     if (cfg->tcp_mux == 0 || cfg->tcp_mux == 1)
         cc->tcp_mux = cfg->tcp_mux;
 
+    /* ---- TLS ---- */
+    set_str(&cc->tls_trusted_ca_pem, cfg->tls_ca_pem);
+    set_str(&cc->tls_cert_pem, cfg->tls_cert_pem);
+    set_str(&cc->tls_key_pem, cfg->tls_key_pem);
+    set_str(&cc->tls_server_name, cfg->tls_server_name);
+    /* The API can turn TLS on, never off: a build compiled with
+     * XFRPC_TLS_*_PEM already has tls_enable set by init_common_config(). */
+    if (cfg->tls_enable == 1)
+        cc->tls_enable = 1;
+    if (cc->tls_trusted_ca_pem || cc->tls_cert_pem || cc->tls_key_pem)
+        cc->tls_enable = 1;
+#if !defined(CONFIG_XFRPC_ENABLE_TLS)
+    if (cc->tls_enable) {
+        debug(LOG_ERR, "xfrpc_start: TLS requested but this build has TLS "
+              "disabled (CONFIG_XFRPC_ENABLE_TLS=n)");
+        return -1;
+    }
+#endif
+
     if (!validate_heartbeat_config()) {
         return -1;
     }
 
-    debug(LOG_INFO, "xfrpc config: server=%s:%d tcp_mux=%d user=%s heartbeat=%d/%d",
+    debug(LOG_INFO, "xfrpc config: server=%s:%d tcp_mux=%d user=%s heartbeat=%d/%d tls=%d",
           cc->server_addr, cc->server_port, cc->tcp_mux,
-          cc->user ? cc->user : "-", cc->heartbeat_interval, cc->heartbeat_timeout);
+          cc->user ? cc->user : "-", cc->heartbeat_interval, cc->heartbeat_timeout,
+          cc->tls_enable);
 
     /* ---- proxies ---- */
     for (int i = 0; i < proxy_count; i++) {

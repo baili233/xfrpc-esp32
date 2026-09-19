@@ -28,13 +28,106 @@ config XFRPC_LOG_LEVEL
 
 # Feature trimming:
 #
-# TCP proxy / AES encryption / snappy compression / tcp_mux are the frp
-# protocol MVP core and are always compiled in (frps defaults require
-# them). Runtime trimming is available via the API:
+# TCP proxy / AES encryption / tcp_mux are the frp protocol MVP core and
+# are always compiled in (frps defaults require them). Runtime trimming is
+# available via the API:
 #   .tcp_mux = 0, .use_encryption = 0, .use_compression = 0.
 #
-# Compile-time Kconfig switches for optional modules (TLS, wire v2,
-# UDP proxy, visitor, xtcp, plugins) are planned once the corresponding
-# sources are ported (see README "Roadmap").
+# The modules below are optional: when switched off, their sources are not
+# compiled at all and the weak stubs in port/module_stubs.c (or the
+# compile-time constant in port/wire_v2_off.c) take over. All of them
+# default to "n" so a default build is the smallest one — turn on the
+# ones your frps actually needs (see README "Configuration").
+
+menu "TLS"
+
+config XFRPC_ENABLE_TLS
+    bool "Enable TLS for the frps control connection"
+    default n
+    # MBEDTLS_TLS_CLIENT is the only Kconfig symbol that gates
+    # MBEDTLS_SSL_CLI_C; X509_CRT_PARSE_C, SNI, CTR_DRBG and ENTROPY are
+    # unconditional in esp_config.h and need no selection here.
+    select MBEDTLS_TLS_CLIENT
+    help
+        Compile port/tls.c and port/mini_event_ssl.c, giving the client a
+        real mbedtls TLS transport towards frps (transport.tls.force).
+
+        Certificate verification follows the frp Go client: without a CA
+        the peer certificate is NOT verified, with a CA it is.
+
+        When off, the stubs in port/module_stubs.c take over
+        (xfrpc_tls_init() returns -1, nothing else happens).
+
+config XFRPC_TLS_CA_PEM
+    string "Compiled-in CA certificate (PEM), empty = do not verify"
+    depends on XFRPC_ENABLE_TLS
+    default ""
+    help
+        PEM text of the CA that signed the frps certificate, used as the
+        compile-time default. It can be overridden at runtime with
+        xfrpc_client_config_t::tls_ca_pem.
+
+        Leave empty to skip peer verification (matches the frp client
+        behaviour when no caFile is configured).
+
+config XFRPC_TLS_CERT_PEM
+    string "Compiled-in client certificate (PEM), empty = none"
+    depends on XFRPC_ENABLE_TLS
+    default ""
+    help
+        PEM text of the client certificate for mutual TLS. frps must be
+        configured with transport.tls.certFile / keyFile accordingly.
+        Overridable at runtime via xfrpc_client_config_t::tls_cert_pem.
+
+config XFRPC_TLS_KEY_PEM
+    string "Compiled-in client private key (PEM), empty = none"
+    depends on XFRPC_ENABLE_TLS
+    default ""
+    help
+        PEM text of the private key matching XFRPC_TLS_CERT_PEM.
+        Overridable at runtime via xfrpc_client_config_t::tls_key_pem.
+
+config XFRPC_TLS_HANDSHAKE_TIMEOUT
+    int "TLS handshake timeout (seconds)"
+    depends on XFRPC_ENABLE_TLS
+    default 10
+    range 1 120
+    help
+        Abort (and let the client reconnect) when the TLS handshake has not
+        completed within this many seconds. Handshake progress needs both
+        read and write readiness, so this cannot use the plain read/write
+        timeout slots of the bufferevent.
+
+endmenu
+
+menu "Optional modules"
+
+config XFRPC_ENABLE_WIRE_V2
+    bool "Support frp wire protocol v2 (frp >= 0.69)"
+    default n
+    help
+        Compile src/wire_v2.c and src/aead_stream.c. Turn this on only when
+        the frps wire protocol is set to "v2"; the client selects v1 by
+        default, and wire_protocol_is_v2() becomes a compile-time constant 0
+        when this is off, letting the linker drop the whole subsystem.
+
+config XFRPC_ENABLE_COMPRESSION
+    bool "Support snappy payload compression"
+    default n
+    help
+        Compile vendor/snappy/snappy.c. Only needed for proxy services
+        created with use_compression = 1; when off, xfrpc_compress() /
+        xfrpc_decompress() fail and proxy_tcp.c falls back to raw data
+        (use_compression is also forced to 0 at config time).
+
+config XFRPC_ENABLE_HEALTH_CHECK
+    bool "Periodic local service health checks"
+    default n
+    help
+        Compile src/health_check.c. Only useful with proxy services that
+        set health_check_type (not reachable through the public API yet, so
+        this is off by default).
+
+endmenu
 
 endmenu

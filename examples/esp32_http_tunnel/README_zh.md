@@ -50,7 +50,16 @@ idf.py menuconfig
 | `EXAMPLE_HTTP_SERVER_PORT` | `8080` | 片上 HTTP 服务的本地端口。 |
 | `EXAMPLE_PROXY_REMOTE_PORT` | `6000` | 由 `frps` 暴露出去的端口。 |
 
-组件级设置（任务栈、优先级、日志级别）在 **xfrpc** 菜单下。
+组件级设置（任务栈、优先级、日志级别）在 **xfrpc** 菜单下，可选模块 **TLS**、
+**wire protocol v2**、**snappy 压缩**、**健康检查** 也在这里，且默认全部为 `n`。
+按所连 `frps` 的实际需要打开即可；各选项含义与实测体积见
+[组件 README](../../README_zh.md#可选模块)。
+
+要连接开了 `transport.tls.force = true` 的 `frps`，请打开
+**xfrpc → TLS → Enable TLS for the frps control connection**，并把签发服务端证书的 CA
+粘贴到 **Compiled-in CA certificate (PEM)**；也可以不编译进去，改为在 `xfrpc_start()`
+时传 `.tls_enable = 1` 与 `.tls_ca_pem = ...`。CA 留空时连接同样是加密的，只是不认证
+服务端身份（等同 `frpc` 未配 `caFile`）。
 
 ## 编译、烧录、验证
 
@@ -115,4 +124,5 @@ xfrpc_start(&cfg, proxies, 1, on_xfrpc_state, NULL);
 
 同一个数组里可以注册多条代理，每条对应 `frpc.toml` 中的一个 `[[proxies]]` 块。
 `use_encryption` / `use_compression` 会分别在流上叠加 AES-128-CFB 和 snappy，在 ESP32 上做大
-流量传输时 CPU 开销比较明显，建议先实测再决定是否开启。
+流量传输时 CPU 开销比较明显，建议先实测再决定是否开启。`.use_compression = 1` 需要先打开
+**xfrpc → Optional modules → snappy payload compression**，否则组件会打一条警告并按未压缩发送。

@@ -25,16 +25,29 @@
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 
+#include "sdkconfig.h"
+#include "debug.h"
+
 #include "event2/event.h"
 #include "event2/buffer.h"
 #include "event2/bufferevent.h"
 #include "event2/dns.h"
 #include "event2/util.h"
 
+#include "mini_event.h"   /* mini_bev_ssl_ops / mini_bev_set_ssl */
+
 #define MINI_SELECT_MAX_WAIT_MS 100   /* stay responsive to cross-task stops */
 #define MINI_RECV_CHUNK         4096
 #define MINI_RECV_MAX_PER_LOOP  (64 * 1024)
 #define MINI_EVBUF_INIT_CAP    4096
+
+/* Only meaningful when a TLS backend is attached; the value comes from the
+ * xfrpc component Kconfig (default 10 s). */
+#ifdef CONFIG_XFRPC_TLS_HANDSHAKE_TIMEOUT
+#define MINI_TLS_HANDSHAKE_TIMEOUT_S CONFIG_XFRPC_TLS_HANDSHAKE_TIMEOUT
+#else
+#define MINI_TLS_HANDSHAKE_TIMEOUT_S 10
+#endif
 
 /* ------------------------------------------------------------------ */
 /* time helpers (monotonic)                                            */
@@ -381,6 +394,16 @@ struct bufferevent {
 
     size_t               wm_read_low;
 
+    /* Optional transport backend (TLS, see port/include/mini_event.h).
+     * When set, all socket I/O goes through ssl_ops and fd is only used
+     * for select()/close(). */
+    const struct mini_bev_ssl_ops *ssl_ops;
+    void                *ssl_ctx;
+    int                  ssl_hs_done;     /* handshake completed */
+    int64_t              ssl_hs_start_us; /* handshake deadline base */
+    int                  ssl_want_read;   /* transport needs the fd readable */
+    int                  ssl_want_write;  /* transport needs the fd writable */
+
     struct bufferevent      *next;
     struct bufferevent     **prev_next;
 };
@@ -432,6 +455,14 @@ void bufferevent_free(struct bufferevent *bev)
 {
     if (!bev)
         return;
+    if (bev->ssl_ops) {
+        /* The transport frees its own state; fd ownership stays here so
+         * BEV_OPT_CLOSE_ON_FREE keeps working. */
+        if (bev->ssl_ops->free_ctx)
+            bev->ssl_ops->free_ctx(bev->ssl_ctx);
+        bev->ssl_ops = NULL;
+        bev->ssl_ctx = NULL;
+    }
     if (bev->options & BEV_OPT_CLOSE_ON_FREE) {
         if (bev->fd >= 0) {
             shutdown(bev->fd, SHUT_RDWR);
@@ -542,7 +573,29 @@ struct evbuffer *bufferevent_get_output(struct bufferevent *bev)
 
 evutil_socket_t bufferevent_getfd(struct bufferevent *bev)
 {
-    return bev ? bev->fd : -1;
+    if (!bev)
+        return -1;
+    /* With a transport backend the fd carries ciphertext: report "no fd"
+     * so callers that would write() to it directly (control.c does, in the
+     * QUIC work-stream path) fall back to bufferevent_write()/flush(). */
+    if (bev->ssl_ops)
+        return -1;
+    return bev->fd;
+}
+
+void mini_bev_set_ssl(struct bufferevent *bev, void *tls,
+                      const struct mini_bev_ssl_ops *ops)
+{
+    if (!bev || !tls || !ops)
+        return;
+    bev->ssl_ops = ops;
+    bev->ssl_ctx = tls;
+    bev->ssl_hs_done = 0;
+    bev->ssl_hs_start_us = mini_now_us();
+    bev->ssl_want_read = 0;
+    bev->ssl_want_write = 0;
+    /* Handshake starts on writability; the bev may still be connecting. */
+    bev->enabled |= EV_READ | EV_WRITE;
 }
 
 void bufferevent_set_timeouts(struct bufferevent *bev,
@@ -720,23 +773,92 @@ static void bev_call_eventcb(struct bufferevent *bev, short what)
         bev->eventcb(bev, what, bev->cbarg);
 }
 
+static void bev_ssl_handshake(struct bufferevent *bev);
+static void bev_ssl_drive_handshake(struct bufferevent *bev);
+static void bev_ssl_apply_backlog(struct bufferevent *bev);
+static void bev_read_input(struct bufferevent *bev);
+
 static void bev_check_connect(struct bufferevent *bev)
 {
     int err = 0;
     socklen_t elen = sizeof(err);
     if (getsockopt(bev->fd, SOL_SOCKET, SO_ERROR, &err, &elen) < 0)
         err = errno;
-    bev->connecting = 0;
     int64_t now = mini_now_us();
     bev->last_read_us = now;
     bev->last_write_us = now;
-    if (err == 0) {
-        bev->enabled = EV_READ | EV_WRITE;
-        bev_call_eventcb(bev, BEV_EVENT_CONNECTED);
-    } else {
+    if (err != 0) {
+        bev->connecting = 0;
         errno = err;
         bev_call_eventcb(bev, BEV_EVENT_ERROR);
+        return;
     }
+    bev->connecting = 0;
+    bev->enabled = EV_READ | EV_WRITE;
+
+    if (bev->ssl_ops) {
+        /* TCP is up but the connection is not usable until the TLS
+         * handshake completes; BEV_EVENT_CONNECTED is deferred until then
+         * so the core never writes plaintext into the socket. */
+        bev->ssl_hs_start_us = mini_now_us();
+        bev_ssl_handshake(bev);
+        return;
+    }
+    bev_call_eventcb(bev, BEV_EVENT_CONNECTED);
+}
+
+/* Drive the TLS handshake; on success (or failure) delivers the event the
+ * core is waiting for. Called from bev_check_connect() and, while the
+ * handshake is in flight, from the read/write readiness paths. */
+static void bev_ssl_handshake(struct bufferevent *bev)
+{
+    int want_read = 0, want_write = 0;
+    int rc = bev->ssl_ops->handshake(bev->ssl_ctx, &want_read, &want_write);
+
+    bev->ssl_want_read = want_read;
+    bev->ssl_want_write = want_write;
+
+    if (rc == 0) {
+        bev->ssl_hs_done = 1;
+        bev->last_read_us = mini_now_us();
+        bev->last_write_us = mini_now_us();
+        bev_call_eventcb(bev, BEV_EVENT_CONNECTED);
+        return;
+    }
+    if (rc > 0 && (want_read || want_write))
+        return;   /* progress made, wait for the next select() */
+    /* Hard failure (certificate mismatch, protocol error, timeout inside
+     * mbedtls, ...). */
+    bev_call_eventcb(bev, BEV_EVENT_ERROR);
+}
+
+/* Re-drive the handshake from the event loop. The handshake may consume
+ * records that were preceded by our own flight (e.g. the ServerHello
+ * arriving together with the session ticket), so it is driven until it
+ * either needs I/O or finishes. */
+static void bev_ssl_drive_handshake(struct bufferevent *bev)
+{
+    for (int i = 0; i < 8 && !bev->ssl_hs_done; i++) {
+        int before_read = bev->ssl_want_read;
+        int before_write = bev->ssl_want_write;
+        bev_ssl_handshake(bev);
+        if (!bev_linked(bev->base, bev) || bev->ssl_hs_done)
+            return;
+        if (bev->ssl_want_read == before_read &&
+            bev->ssl_want_write == before_write)
+            return;   /* no state change — waiting for the socket */
+    }
+}
+
+/* After a successful handshake the core installs its callbacks from
+ * BEV_EVENT_CONNECTED; whatever the peer already sent is buffered inside
+ * the transport. Pull it in so the login response is not stalled waiting
+ * for a second readiness notification. */
+static void bev_ssl_apply_backlog(struct bufferevent *bev)
+{
+    if (bev->ssl_ops->pending(bev->ssl_ctx) <= 0)
+        return;
+    bev_read_input(bev);
 }
 
 static void bev_read_input(struct bufferevent *bev)
@@ -744,25 +866,43 @@ static void bev_read_input(struct bufferevent *bev)
     uint8_t chunk[MINI_RECV_CHUNK];
     size_t got = 0;
     for (;;) {
-        int n = recv(bev->fd, chunk, sizeof(chunk), 0);
-        if (n > 0) {
-            evbuffer_add(bev->input, chunk, (size_t)n);
-            got += (size_t)n;
-            bev->last_read_us = mini_now_us();
-            if (got >= MINI_RECV_MAX_PER_LOOP)
-                break;
-            continue;
+        int n;
+        if (bev->ssl_ops) {
+            int want_read = 0, want_write = 0;
+            n = bev->ssl_ops->read(bev->ssl_ctx, chunk, sizeof(chunk),
+                                   &want_read, &want_write);
+            bev->ssl_want_read = want_read;
+            bev->ssl_want_write = want_write;
+            if (n == MINI_BEV_SSL_EOF) {
+                bev_call_eventcb(bev, BEV_EVENT_EOF);
+                return;
+            }
+            if (n < 0) {
+                bev_call_eventcb(bev, BEV_EVENT_ERROR);
+                return;
+            }
+            if (n == 0)
+                break;  /* nothing available right now */
+        } else {
+            n = recv(bev->fd, chunk, sizeof(chunk), 0);
+            if (n == 0) {
+                bev_call_eventcb(bev, BEV_EVENT_EOF);
+                return;
+            }
+            if (n < 0) {
+                if (errno == EINTR)
+                    continue;
+                if (errno == EAGAIN || errno == EWOULDBLOCK)
+                    break;
+                bev_call_eventcb(bev, BEV_EVENT_ERROR);
+                return;
+            }
         }
-        if (n == 0) {
-            bev_call_eventcb(bev, BEV_EVENT_EOF);
-            return;
-        }
-        if (errno == EINTR)
-            continue;
-        if (errno == EAGAIN || errno == EWOULDBLOCK)
+        evbuffer_add(bev->input, chunk, (size_t)n);
+        got += (size_t)n;
+        bev->last_read_us = mini_now_us();
+        if (got >= MINI_RECV_MAX_PER_LOOP)
             break;
-        bev_call_eventcb(bev, BEV_EVENT_ERROR);
-        return;
     }
     if (got > 0 && bev->readcb && (bev->enabled & EV_READ) &&
         evbuffer_get_length(bev->input) >= bev->wm_read_low) {
@@ -774,21 +914,47 @@ static void bev_flush_output(struct bufferevent *bev)
 {
     struct evbuffer *out = bev->output;
     while (evbuffer_get_length(out) > 0) {
-        int w = send(bev->fd, out->data, evbuffer_get_length(out), 0);
-        if (w > 0) {
-            evbuffer_drain(out, (size_t)w);
-            bev->last_write_us = mini_now_us();
-            continue;
+        int w;
+        size_t drained = 0;
+
+        if (bev->ssl_ops) {
+            int want_read = 0, want_write = 0;
+            size_t done = 0;
+            int rc = bev->ssl_ops->write(bev->ssl_ctx,
+                                         out->data, evbuffer_get_length(out),
+                                         &done, &want_read, &want_write);
+            bev->ssl_want_read = want_read;
+            bev->ssl_want_write = want_write;
+            if (done > 0)
+                bev->last_write_us = mini_now_us();
+            if (rc != 0) {
+                if (want_read || want_write)
+                    break;   /* retry the same buffer next loop */
+                bev_call_eventcb(bev, BEV_EVENT_ERROR);
+                return;
+            }
+            w = (int)done;
+            if (w == 0)
+                break;       /* no progress, wants is set */
+        } else {
+            w = send(bev->fd, out->data, evbuffer_get_length(out), 0);
+            if (w > 0) {
+                bev->last_write_us = mini_now_us();
+            } else if (w < 0 && errno == EINTR) {
+                continue;
+            } else if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                break;
+            } else if (w < 0) {
+                bev_call_eventcb(bev, BEV_EVENT_ERROR);
+                return;
+            } else {
+                break; /* w == 0 */
+            }
         }
-        if (w < 0 && errno == EINTR)
-            continue;
-        if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+        drained = (size_t)w;
+        evbuffer_drain(out, drained);
+        if (!bev->ssl_ops && drained == 0)
             break;
-        if (w < 0) {
-            bev_call_eventcb(bev, BEV_EVENT_ERROR);
-            return;
-        }
-        break; /* w == 0 */
     }
     if (evbuffer_get_length(out) == 0 && bev->writecb &&
         (bev->enabled & EV_WRITE)) {
@@ -805,6 +971,19 @@ static void bev_check_timeouts(struct bufferevent *bev)
     if (bev->connecting) {
         if (wr > 0 && now - bev->connect_start_us >= wr) {
             bev->connecting = 0;
+            bev_call_eventcb(bev, BEV_EVENT_TIMEOUT | BEV_EVENT_WRITING);
+        }
+        return;
+    }
+    /* TLS handshake deadline. It has its own timer because the handshake
+     * needs both directions; tv_read/tv_write cannot express that, and the
+     * bev is already "connected" here so the tv_write branch below would
+     * only fire on a non-empty output buffer. */
+    if (bev->ssl_ops && !bev->ssl_hs_done) {
+        int64_t hs = (int64_t)MINI_TLS_HANDSHAKE_TIMEOUT_S * 1000000;
+        if (hs > 0 && now - bev->ssl_hs_start_us >= hs) {
+            debug(LOG_ERR, "TLS handshake timed out after %d s",
+                  (int)MINI_TLS_HANDSHAKE_TIMEOUT_S);
             bev_call_eventcb(bev, BEV_EVENT_TIMEOUT | BEV_EVENT_WRITING);
         }
         return;
@@ -845,11 +1024,29 @@ int event_base_dispatch(struct event_base *base)
                 continue;
             if (bev->connecting) {
                 FD_SET(bev->fd, &wfds);
+            } else if (bev->ssl_ops && !bev->ssl_hs_done) {
+                /* Handshake in flight: the transport tells us which
+                 * direction it is waiting for (it alternates between
+                 * flights). Never arm both unconditionally — the socket is
+                 * writable almost all the time, which would spin the loop. */
+                if (bev->ssl_want_read || !bev->ssl_want_write)
+                    FD_SET(bev->fd, &rfds);
+                if (bev->ssl_want_write || !bev->ssl_want_read)
+                    FD_SET(bev->fd, &wfds);
             } else {
-                if (bev->enabled & EV_READ)
+                int want_read = (bev->enabled & EV_READ) != 0;
+                if (bev->ssl_ops &&
+                    (bev->ssl_want_read ||
+                     bev->ssl_ops->pending(bev->ssl_ctx) > 0)) {
+                    /* Decrypted bytes may already be sitting in the
+                     * transport while the socket itself is quiet. */
+                    want_read = 1;
+                }
+                if (want_read)
                     FD_SET(bev->fd, &rfds);
                 if ((bev->enabled & EV_WRITE) &&
-                    evbuffer_get_length(bev->output) > 0)
+                    (evbuffer_get_length(bev->output) > 0 ||
+                     bev->ssl_want_write))
                     FD_SET(bev->fd, &wfds);
             }
             if (FD_ISSET(bev->fd, &rfds) || FD_ISSET(bev->fd, &wfds)) {
@@ -924,6 +1121,36 @@ int event_base_dispatch(struct event_base *base)
             }
             if (bev->connecting && FD_ISSET(bev->fd, &wfds)) {
                 bev_check_connect(bev);
+                bev = next;
+                continue;
+            }
+            if (!bev->connecting && bev->ssl_ops && !bev->ssl_hs_done) {
+                /* Handshake in flight: feed it, then drain anything it
+                 * produced. bev_read_input/bev_flush_output cannot be used
+                 * for the ciphertext side, and the fd_sets were computed
+                 * before the handshake, so the follow-up work is done here
+                 * rather than by falling through. */
+                bev_ssl_drive_handshake(bev);
+                if (!bev_linked(base, bev)) {
+                    bev = next;
+                    continue;
+                }
+                if (bev->ssl_hs_done) {
+                    /* BEV_EVENT_CONNECTED has now fired, so the core may
+                     * already have queued plaintext (login) and the peer may
+                     * already have pipelined the response. */
+                    bev_flush_output(bev);
+                    if (!bev_linked(base, bev)) {
+                        bev = next;
+                        continue;
+                    }
+                    bev_ssl_apply_backlog(bev);
+                    if (!bev_linked(base, bev)) {
+                        bev = next;
+                        continue;
+                    }
+                }
+                bev_check_timeouts(bev);
                 bev = next;
                 continue;
             }

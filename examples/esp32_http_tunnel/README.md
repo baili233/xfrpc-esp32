@@ -56,7 +56,20 @@ Under **xfrpc example configuration**:
 | `EXAMPLE_HTTP_SERVER_PORT` | `8080` | Local port of the on-chip HTTP server. |
 | `EXAMPLE_PROXY_REMOTE_PORT` | `6000` | Port exposed by `frps`. |
 
-Component-level settings (task stack, priority, log level) are under **xfrpc**.
+Component-level settings (task stack, priority, log level) are under **xfrpc**,
+together with the optional modules — **TLS**, **wire protocol v2**, **snappy
+compression** and **health check** all default to `n`. Enable only what the
+`frps` you are connecting to needs; see the
+[component README](../../README.md#optional-modules) for the options and the
+measured size of each combination.
+
+To connect to an `frps` with `transport.tls.force = true`, turn on
+**xfrpc → TLS → Enable TLS for the frps control connection**, and paste the CA
+that signed the server certificate into
+**Compiled-in CA certificate (PEM)** — or call `xfrpc_start()` with
+`.tls_enable = 1` and `.tls_ca_pem = ...` instead. Leaving the CA empty still
+gives you an encrypted connection, it just does not authenticate the server
+(the same thing `frpc` does without `caFile`).
 
 ## Build, flash, verify
 
@@ -125,4 +138,6 @@ xfrpc_start(&cfg, proxies, 1, on_xfrpc_state, NULL);
 Several proxies can be registered in the same array; each entry is one `frpc.toml`
 `[[proxies]]` block. `use_encryption` / `use_compression` add AES-128-CFB and snappy
 on the stream, at a CPU cost that is noticeable on an ESP32 at high throughput —
-measure before enabling them for bulk transfer.
+measure before enabling them for bulk transfer. `.use_compression = 1` needs
+**xfrpc → Optional modules → snappy payload compression** enabled, otherwise the
+component logs a warning and sends the payload uncompressed.

@@ -1,6 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 /*
  * Copyright (c) 2023 Dengfeng Liu <liudf0716@gmail.com>
+ *
+ * ESP32 port: interface only. Upstream implements this on OpenSSL via
+ * libevent's SSL bufferevent filter; here it is implemented on mbedtls in
+ * port/tls.c (CONFIG_XFRPC_ENABLE_TLS=y) or stubbed in port/module_stubs.c
+ * (CONFIG_XFRPC_ENABLE_TLS=n). src/control.c is the only caller.
+ *
+ * The xfrpc_ prefix keeps these names out of the way of the unrelated
+ * tls_init() that lives in an ESP-IDF system library (wpa_supplicant).
  */
 
 #ifndef XFRPC_TLS_H
@@ -17,7 +25,7 @@
  *
  * @return 0 on success, -1 on failure
  */
-int tls_init(void);
+int xfrpc_tls_init(void);
 
 /**
  * Wrap an existing TCP bufferevent with TLS.
@@ -28,27 +36,27 @@ int tls_init(void);
  * @param bev    The raw TCP bufferevent to wrap (consumed on success)
  * @return       TLS-wrapped bufferevent, or NULL on error
  */
-struct bufferevent *tls_wrap_bev(struct event_base *base, struct bufferevent *bev);
+struct bufferevent *xfrpc_tls_wrap_bev(struct event_base *base, struct bufferevent *bev);
 
 /**
  * Clean up and free the global TLS context.
  * Call during shutdown.
  */
-void tls_cleanup(void);
+void xfrpc_tls_cleanup(void);
 
 /**
  * Check if TLS is enabled in configuration.
  *
  * @return 1 if TLS is enabled, 0 otherwise
  */
-int tls_is_enabled(void);
+int xfrpc_tls_is_enabled(void);
 
 /**
  * Print OpenSSL error details to debug log.
  *
  * @param context  Description string for the error context
  */
-void tls_log_errors(const char *context);
+void xfrpc_tls_log_errors(const char *context);
 
 /**
  * Load TLS certificates from config into an SSL_CTX.
@@ -58,6 +66,6 @@ void tls_log_errors(const char *context);
  * @param ctx  The SSL_CTX to configure (passed as void* for compatibility)
  * @return 0 on success, -1 on failure
  */
-int tls_load_certs_to_ctx(void *ctx);
+int xfrpc_tls_load_certs_to_ctx(void *ctx);
 
 #endif /* XFRPC_TLS_H */

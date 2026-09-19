@@ -7,12 +7,38 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 # FreeRTOS tick 1000 Hz for finer timer resolution (mini-libevent timers)
 CONFIG_FREERTOS_HZ=1000
 
-# mbedtls: only needed for AES/PBKDF2/HMAC, no TLS in MVP -> save flash
+# mbedtls: AES/PBKDF2/HMAC/digests are always needed (proxy encryption and
+# the frp login), so the certificate bundle is not — no HTTPS client here.
+# CONFIG_XFRPC_ENABLE_TLS only pulls in the TLS client code, it does not
+# re-enable the bundle. Set the bundle to y if you want the ESP-IDF root CAs
+# (then leave XFRPC_TLS_CA_PEM empty and verification uses the bundle).
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=n
 
 # lwip: allow more simultaneous TCP connections (control + proxies)
 CONFIG_LWIP_MAX_ACTIVE_TCP=16
 CONFIG_LWIP_MAX_LISTENING_TCP=16
+
+# ---- xfrpc optional modules (see components/xfrpc/Kconfig) ----
+# All off by default in a fresh project; turn on what your frps needs.
+#
+# TLS to frps (frps transport.tls.force). Setting any of the three PEM values
+# also turns TLS on; leaving the CA empty gives an encrypted but unverified
+# connection, which is what frpc does without caFile.
+#
+CONFIG_XFRPC_ENABLE_TLS=y
+# CA/cert/key can also be compiled in here instead of via the API:
+# CONFIG_XFRPC_TLS_CA_PEM="-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n"
+# CONFIG_XFRPC_TLS_CERT_PEM=""   # mTLS client certificate
+# CONFIG_XFRPC_TLS_KEY_PEM=""    # mTLS client key
+#
+# frp wire protocol v2 (frps transport.protocol = "v2"):
+# CONFIG_XFRPC_ENABLE_WIRE_V2=y
+#
+# snappy compression for proxies created with use_compression = 1:
+# CONFIG_XFRPC_ENABLE_COMPRESSION=y
+#
+# Periodic local-service health checks (no API to configure them yet):
+# CONFIG_XFRPC_ENABLE_HEALTH_CHECK=y
 
 # WiFi
 CONFIG_ESP_WIFI_NVS_ENABLED=y

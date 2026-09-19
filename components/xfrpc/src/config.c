@@ -17,6 +17,7 @@
 #include <assert.h>
 
 #include "uthash.h"
+#include "sdkconfig.h"   /* optional-module switches (XFRPC_ENABLE_*) */
 #include "config.h"
 #include "client.h"
 #include "debug.h"
@@ -72,6 +73,9 @@ void free_common_config(void)
 	SAFE_FREE(c_conf->tls_key_file);
 	SAFE_FREE(c_conf->tls_trusted_ca_file);
 	SAFE_FREE(c_conf->tls_server_name);
+	SAFE_FREE(c_conf->tls_trusted_ca_pem);
+	SAFE_FREE(c_conf->tls_cert_pem);
+	SAFE_FREE(c_conf->tls_key_pem);
 	SAFE_FREE(c_conf->user);
 	SAFE_FREE(c_conf->protocol);
 	SAFE_FREE(c_conf->wire_protocol);
@@ -360,7 +364,6 @@ static void init_common_conf(struct common_conf *config) {
 	config->heartbeat_interval = 30;
 	config->heartbeat_timeout = 90;
 	config->tcp_mux = 1;
-	config->tls_enable = 0;
 	config->protocol = strdup("tcp");
 	config->wire_protocol = strdup("v1");
 	config->quic_bind_port = 0;
@@ -368,7 +371,29 @@ static void init_common_conf(struct common_conf *config) {
 	config->tls_key_file = NULL;
 	config->tls_trusted_ca_file = NULL;
 	config->tls_server_name = NULL;
+	config->tls_trusted_ca_pem = NULL;
+	config->tls_cert_pem = NULL;
+	config->tls_key_pem = NULL;
 	config->is_router = 0;
+
+#if defined(CONFIG_XFRPC_ENABLE_TLS)
+	/* Kconfig-provided inline PEM defaults; the public API overrides them.
+	 * Compiling in any TLS material is taken as "this build wants TLS", so
+	 * tls_enable follows — otherwise tls_init() would never be called
+	 * (control.c inits TLS only when tls_enable is set). */
+	if (CONFIG_XFRPC_TLS_CA_PEM[0]) {
+		config->tls_trusted_ca_pem = strdup(CONFIG_XFRPC_TLS_CA_PEM);
+		config->tls_enable = 1;
+	}
+	if (CONFIG_XFRPC_TLS_CERT_PEM[0]) {
+		config->tls_cert_pem = strdup(CONFIG_XFRPC_TLS_CERT_PEM);
+		config->tls_enable = 1;
+	}
+	if (CONFIG_XFRPC_TLS_KEY_PEM[0]) {
+		config->tls_key_pem = strdup(CONFIG_XFRPC_TLS_KEY_PEM);
+		config->tls_enable = 1;
+	}
+#endif
 }
 
 /**
@@ -515,6 +540,16 @@ struct proxy_service *config_add_proxy_service(const char *name,
 	ps->remote_port     = remote_port;
 	ps->use_encryption  = !!use_encryption;
 	ps->use_compression = !!use_compression;
+
+#if !defined(CONFIG_XFRPC_ENABLE_COMPRESSION)
+	/* snappy is not compiled: say so instead of silently not compressing. */
+	if (ps->use_compression) {
+		debug(LOG_WARNING, "proxy [%s]: compression requested but "
+		      "XFRPC_ENABLE_COMPRESSION is off (sending uncompressed)",
+		      ps->proxy_name);
+		ps->use_compression = 0;
+	}
+#endif
 
 	/* NB: must use HASH_ADD_KEYPTR with the string pointer itself.
 	 * HASH_ADD_STR in this vendored uthash 1.9.8 passes &ps->proxy_name

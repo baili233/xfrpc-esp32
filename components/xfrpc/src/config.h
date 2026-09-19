@@ -67,6 +67,16 @@ struct common_conf {
 	char    *tls_trusted_ca_file; /* CA certificate file for verification */
 	char    *tls_server_name;     /* SNI server name (optional) */
 
+	/* ESP32 port: inline PEM material. The ESP32 has no config file, and
+	 * reading certificates from a filesystem is not guaranteed to be
+	 * available, so the public API / Kconfig supply the PEM text itself.
+	 * Any of these takes precedence over the corresponding *_file above.
+	 * NULL tls_trusted_ca_pem = peer certificate is not verified (the
+	 * same rule the frp Go client applies). */
+	char    *tls_trusted_ca_pem;
+	char    *tls_cert_pem;
+	char    *tls_key_pem;
+
 	/* Identity settings */
 	char    *user;                /* client user name (for visitor auth) */
 

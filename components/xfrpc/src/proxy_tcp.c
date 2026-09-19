@@ -28,7 +28,6 @@
 #include "tcpmux.h"
 #include "control.h"
 #include "crypto_stream.h"
-#include "vendor/snappy/snappy.h"
 
 /** @brief Maximum buffer size for SOCKS5 protocol data */
 #define SOCKS5_BUFFER_SIZE 2048
@@ -448,8 +447,8 @@ static void crypto_encode_evbuffer(struct proxy_client *client,
 	size_t comp_len = 0;
 	uint8_t *comp_data = NULL;
 	if (client->use_compression) {
-		size_t max_comp = snappy_max_compressed_length(len);
-		comp_data = malloc(max_comp);
+		size_t max_comp = xfrpc_max_compressed_length(len);
+		comp_data = max_comp ? malloc(max_comp) : NULL;
 		if (comp_data) {
 			if (xfrpc_compress(data, len, comp_data, &max_comp) == 0) {
 				comp_len = max_comp;

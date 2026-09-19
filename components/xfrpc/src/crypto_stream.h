@@ -104,6 +104,19 @@ void crypto_reader_set_iv_received(struct crypto_ctx *ctx);
 /* ---- Snappy compression (compatible with frp) ---- */
 
 /**
+ * @brief Upper bound for the compressed size of @p in_len bytes.
+ *
+ * Callers size their output buffer with this. Returns 0 when compression is
+ * not compiled in (CONFIG_XFRPC_ENABLE_COMPRESSION=n), which is the signal
+ * not to bother compressing at all — it doubles as the snappy.h include
+ * barrier for the rest of the tree.
+ *
+ * @param in_len Input length
+ * @return Buffer size to allocate, or 0 if compression is unavailable
+ */
+size_t xfrpc_max_compressed_length(size_t in_len);
+
+/**
  * @brief Compress data using snappy
  * @param in Input data
  * @param in_len Input length

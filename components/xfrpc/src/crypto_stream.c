@@ -21,7 +21,10 @@
 
 #include <openssl/evp.h>
 #include <openssl/rand.h>
+#include "sdkconfig.h"   /* CONFIG_XFRPC_ENABLE_COMPRESSION */
+#if defined(CONFIG_XFRPC_ENABLE_COMPRESSION)
 #include "vendor/snappy/snappy.h"
+#endif
 
 #include "crypto_stream.h"
 #include "debug.h"
@@ -179,6 +182,40 @@ int crypto_decrypt(struct crypto_ctx *ctx, uint8_t *data, size_t len)
 
 /* ---- Snappy compression (compatible with frp) ---- */
 
+/*
+ * ESP32 port: snappy is optional (CONFIG_XFRPC_ENABLE_COMPRESSION). When it
+ * is not compiled in these two functions always fail, which is exactly the
+ * contract the callers already implement: proxy_tcp.c checks the return
+ * value and falls back to sending the payload uncompressed.
+ */
+#if !defined(CONFIG_XFRPC_ENABLE_COMPRESSION)
+
+size_t xfrpc_max_compressed_length(size_t in_len)
+{
+	(void)in_len;
+	return 0;
+}
+
+int xfrpc_compress(const uint8_t *in, size_t in_len, uint8_t *out, size_t *out_len)
+{
+	(void)in; (void)in_len; (void)out; (void)out_len;
+	return -1;
+}
+
+int xfrpc_decompress(const uint8_t *in, size_t in_len,
+                     uint8_t *out, size_t out_buf_size, size_t *out_len)
+{
+	(void)in; (void)in_len; (void)out; (void)out_buf_size; (void)out_len;
+	return -1;
+}
+
+#else /* CONFIG_XFRPC_ENABLE_COMPRESSION */
+
+size_t xfrpc_max_compressed_length(size_t in_len)
+{
+	return snappy_max_compressed_length(in_len);
+}
+
 int xfrpc_compress(const uint8_t *in, size_t in_len, uint8_t *out, size_t *out_len)
 {
 	if (!in || !out || !out_len || in_len == 0) return -1;
@@ -227,3 +264,5 @@ int xfrpc_decompress(const uint8_t *in, size_t in_len,
 	*out_len = uncomp_len;
 	return 0;
 }
+
+#endif /* CONFIG_XFRPC_ENABLE_COMPRESSION */

@@ -4,15 +4,25 @@
  * this build (tls.c, visitor.c, xtcp_client.c, xtcp_visitor.c,
  * proxy_udp.c, oidc_auth.c, plugins/).
  *
- * All stubs are __attribute__((weak)): when a Kconfig option pulls in the
- * real module, its definitions override these automatically.
+ * The stubs are __attribute__((weak)) so that a real definition wins at
+ * link time. That alone is NOT enough for modules that have a Kconfig
+ * switch: this file's members are pulled out of libxfrpc.a first (control.c
+ * references several of the stubs), and once a member defines xfrpc_tls_init, the
+ * archive member holding the real xfrpc_tls_init() is never sought — a weak
+ * definition does not create the undefined reference that pulls it in.
+ * Modules with a switch are therefore also guarded by #if, which is what
+ * actually makes CONFIG_XFRPC_ENABLE_* decide the implementation; the weak
+ * attribute stays as a safety net for any other link order.
  */
 
 #include <stdlib.h>
 
+#include "sdkconfig.h"
+
 #include "debug.h"
 #include "tls.h"
 #include "proxy.h"
+#include "health_check.h"
 #include "visitor.h"
 #include "xtcp_client.h"
 #include "xtcp_visitor.h"
@@ -20,13 +30,15 @@
 
 /* ---------------- TLS (tls.c) ---------------- */
 
-__attribute__((weak)) int tls_init(void)
+#if !defined(CONFIG_XFRPC_ENABLE_TLS)
+
+__attribute__((weak)) int xfrpc_tls_init(void)
 {
     debug(LOG_ERR, "TLS support not compiled in");
     return -1;
 }
 
-__attribute__((weak)) struct bufferevent *tls_wrap_bev(struct event_base *base,
+__attribute__((weak)) struct bufferevent *xfrpc_tls_wrap_bev(struct event_base *base,
                                                        struct bufferevent *bev)
 {
     (void)base;
@@ -36,25 +48,61 @@ __attribute__((weak)) struct bufferevent *tls_wrap_bev(struct event_base *base,
     return NULL;
 }
 
-__attribute__((weak)) void tls_cleanup(void)
+__attribute__((weak)) void xfrpc_tls_cleanup(void)
 {
 }
 
-__attribute__((weak)) int tls_is_enabled(void)
+__attribute__((weak)) int xfrpc_tls_is_enabled(void)
 {
     return 0;
 }
 
-__attribute__((weak)) void tls_log_errors(const char *context)
+__attribute__((weak)) void xfrpc_tls_log_errors(const char *context)
 {
     (void)context;
 }
 
-__attribute__((weak)) int tls_load_certs_to_ctx(void *ctx)
+__attribute__((weak)) int xfrpc_tls_load_certs_to_ctx(void *ctx)
 {
     (void)ctx;
     return -1;
 }
+
+#endif /* !CONFIG_XFRPC_ENABLE_TLS */
+
+/* ---------------- health check (health_check.c) ---------------- */
+
+/*
+ * XFRPC_ENABLE_HEALTH_CHECK off: no proxy service can carry a
+ * health_check_type in an API-configured build, so this is a no-op (and
+ * "healthy" is the honest answer — the proxy lifecycle does not depend on
+ * a check that never ran).
+ */
+#if !defined(CONFIG_XFRPC_ENABLE_HEALTH_CHECK)
+
+__attribute__((weak)) void health_check_start_all(struct event_base *base,
+                                                  health_check_cb_t callback,
+                                                  void *ctx)
+{
+    (void)base; (void)callback; (void)ctx;
+}
+
+__attribute__((weak)) void health_check_stop_all(void)
+{
+}
+
+__attribute__((weak)) int health_check_is_healthy(const char *proxy_name)
+{
+    (void)proxy_name;
+    return 1;
+}
+
+__attribute__((weak)) int health_check_count(void)
+{
+    return 0;
+}
+
+#endif /* !CONFIG_XFRPC_ENABLE_HEALTH_CHECK */
 
 /* ---------------- UDP proxy (proxy_udp.c) ---------------- */
 

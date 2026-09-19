@@ -39,6 +39,25 @@ typedef struct {
     int         heartbeat_interval; /* seconds, 0 = 30 */
     int         heartbeat_timeout;  /* seconds, 0 = 90 */
     int         tcp_mux;            /* 0/1, -1 = default (1, matches frps) */
+
+    /*
+     * TLS to frps (requires CONFIG_XFRPC_ENABLE_TLS). All PEM fields are
+     * NUL-terminated text, not file paths, and may be left NULL to fall back
+     * to the XFRPC_TLS_*_PEM Kconfig values.
+     *
+     * Setting any of them turns TLS on; it can also be switched on
+     * explicitly with tls_enable = 1.
+     */
+    int         tls_enable;         /* 0/1 = off/on. Supplying any of the PEM
+                                       fields below (or a XFRPC_TLS_*_PEM
+                                       Kconfig value) also turns TLS on. */
+    const char *tls_ca_pem;         /* CA that signed the frps certificate;
+                                       NULL/"" = do NOT verify the peer, which
+                                       is what frpc does without caFile */
+    const char *tls_cert_pem;       /* client certificate (mTLS, optional) */
+    const char *tls_key_pem;        /* client private key (mTLS, optional) */
+    const char *tls_server_name;    /* SNI + certificate check name;
+                                       NULL = server_addr */
 } xfrpc_client_config_t;
 
 /** TCP proxy definition. String fields are copied by xfrpc_start(). */

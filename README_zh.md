@@ -18,16 +18,20 @@ ESP-IDF 自带的 mbedtls、cJSON 和 lwIP 实现。`src/` 中只有少量几行
 | TCP 代理 | 支持 |
 | `tcp_mux`（控制连接多路复用） | 支持，默认开启 |
 | `use_encryption`（AES-128-CFB 流加密） | 支持 |
-| `use_compression`（snappy 压缩） | 支持 |
+| `use_compression`（snappy 压缩） | 支持（编译期可选） |
 | 心跳 / 自动重连 | 支持 |
 | 通过公共 API 编程配置 | 支持 |
-| TLS 控制连接 | 暂未支持（占位实现） |
+| TLS 控制连接 | 支持（mbedtls，编译期可选），含 mTLS |
 | UDP 代理 | 暂未支持（占位实现） |
 | `stcp` / visitor / `xtcp`（P2P） | 暂未支持（占位实现） |
 | HTTP/HTTPS 代理类型、自定义域名 | 暂未支持（占位实现） |
-| `transport.wireProtocol = v2` | 源码已在，尚未启用 |
+| `transport.wireProtocol = v2` | 支持（编译期可选） |
 | QUIC 传输 | 暂未支持（无 ngtcp2） |
 | kcp / websocket / wss | 不支持 |
+
+TLS、wire protocol v2、snappy 和健康检查各自有一个 Kconfig 开关，且**默认全部关闭**——
+默认构建即体积最小的构建，按 `frps` 的实际需要打开，只付出对应模块的体积
+（见[配置项](#配置项)）。
 
 `frps` 服务端也需要开启 `tcp_mux`，新版 `frps` 默认即开启。
 
@@ -41,6 +45,9 @@ xfrpc-esp32/
 │       ├── src/               上游 xfrpc 核心（版权见上游 LICENSE）
 │       ├── port/              ESP32 移植层
 │       │   ├── mini_event.c   libevent 最小替代实现
+│       │   ├── mini_event_ssl.c  bufferevent 的 mbedtls 后端（TLS）
+│       │   ├── tls.c          控制连接的 mbedtls TLS 实现（TLS）
+│       │   ├── wire_v2_off.c  关闭 v2 时的 wire_protocol_is_v2() == 0
 │       │   ├── openssl_compat.c  OpenSSL EVP/HMAC/MD5 -> mbedtls
 │       │   ├── json_compat.c  json-c -> cJSON
 │       │   ├── esp_platform.c uname()、致命错误处理、命令行/syslog 占位
@@ -165,18 +172,79 @@ FreeRTOS 任务并立即返回：
 | `CONFIG_XFRPC_TASK_PRIORITY` | 5 | 该任务优先级。 |
 | `CONFIG_XFRPC_LOG_LEVEL` | 6 | syslog 风格日志级别，`0`=emerg … `7`=debug。 |
 
-TCP 代理、AES 加密、snappy 压缩和 `tcp_mux` 属于协议 MVP，始终参与编译；
+### 可选模块
+
+这些开关决定源码是否参与编译：关闭时对应源码完全不编译，由占位实现（wire v2 是
+`port/wire_v2_off.c` 里返回常量 0 的 `wire_protocol_is_v2()`）顶替，链接器会把整个子系统丢掉。
+全部默认 `n`。
+
+| 选项 | 默认值 | 说明 |
+| ---- | ------ | ---- |
+| `CONFIG_XFRPC_ENABLE_TLS` | `n` | 控制连接的 mbedtls TLS 传输，会 `select MBEDTLS_TLS_CLIENT`。 |
+| `CONFIG_XFRPC_TLS_CA_PEM` | `""` | 签发 `frps` 证书的 CA（PEM）。留空则**不校验**对端证书，与 `frpc` 未配 `caFile` 时一致。 |
+| `CONFIG_XFRPC_TLS_CERT_PEM` | `""` | 客户端证书 PEM（mTLS）。 |
+| `CONFIG_XFRPC_TLS_KEY_PEM` | `""` | 客户端私钥 PEM（mTLS）。 |
+| `CONFIG_XFRPC_TLS_HANDSHAKE_TIMEOUT` | 10 | 握手超过该秒数即中断并重连。 |
+| `CONFIG_XFRPC_ENABLE_WIRE_V2` | `n` | `frp` wire protocol v2（`frps` 设 `transport.protocol = "v2"`）。 |
+| `CONFIG_XFRPC_ENABLE_COMPRESSION` | `n` | 为 `use_compression = 1` 的代理编译 snappy 压缩。 |
+| `CONFIG_XFRPC_ENABLE_HEALTH_CHECK` | `n` | 本地服务周期性健康检查。 |
+
+在示例工程（ESP32-S3、`esp32_http_tunnel`、`idf.py build`）上实测的固件体积：
+
+| TLS | wire v2 | 压缩 | 健康检查 | app 体积 | 1 MB 分区剩余 |
+| --- | ------- | ---- | -------- | -------- | ------------- |
+| `n` | `n` | `n` | `n` | 879,392 B (0xd6b20) | 16% |
+| `n` | `y` | `y` | `y` | 897,904 B (0xdb370) | 14% |
+| `y` | `n` | `n` | `n` | 956,864 B (0xe99c0) | 9% |
+| `y` | `y` | `y` | `y` | 975,248 B (0xee190) | 7% |
+
+全关档即新的默认配置，也是最小的一档；全开档在 1 MB app 分区内仍余 7%。
+TLS 之所以是后两行之间主要差异，是因为它把一个 mbedtls TLS client 拉进固件。
+
+TCP 代理、AES 加密和 `tcp_mux` 属于协议 MVP，始终参与编译；
 `tcp_mux`、`use_encryption`、`use_compression` 可在运行时按代理通过 API 关闭。
-可选模块（TLS、UDP 代理、visitor、`xtcp`、插件）的编译期开关会随对应移植一起加入。
+
+## TLS
+
+`frps` 在 `transport.tls.force` 打开时会对每条连接做 TLS 识别；即使不开，服务端同样会识别
+TLS 连接、只是对非 TLS 客户端继续走明文。所以下面两种写法都能用：
+
+```c
+/* 用 CA 校验服务端证书 */
+static const char ca_pem[] = "-----BEGIN CERTIFICATE-----\n...\n";
+xfrpc_client_config_t cfg = {
+    .server_addr = "frps.example.com",
+    .tls_enable  = 1,
+    .tls_ca_pem  = ca_pem,
+};
+
+/* 不配 CA：流量加密，但不认证对端（等同 frpc 未配 caFile） */
+xfrpc_client_config_t cfg2 = {
+    .server_addr = "203.0.113.10",
+    .tls_enable  = 1,
+};
+```
+
+`tls_server_name` 同时决定 SNI 扩展和证书校验用的名字，默认取 `server_addr`；当地址是字面
+IP 时会自动跳过（mbedtls 的 `set_hostname` 只接受域名）。
+
+双向 TLS（`frps` 配了 `transport.tls.certFile`/`keyFile`）用 `tls_cert_pem` +
+`tls_key_pem`。
+
+两点说明：
+
+- **ESP32 上不校验证书有效期**：ESP-IDF 的 mbedtls 没开 `MBEDTLS_HAVE_TIME_DATE`，
+  且系统时间在 SNTP 同步前是 1970。若需要校验证书有效期，请在调用 `xfrpc_start()` 之前完成
+  SNTP 同步。证书链、签名和主机名的校验不受影响。
+- PEM 字符串既可以编译进去（Kconfig），也可以由调用方传入（API），**不依赖文件系统**。
+  挂了文件系统时，`tls_trusted_ca_file` / `tls_cert_file` / `tls_key_file` 仍可作为回退。
 
 ## 后续计划
 
-1. TLS 控制连接（`tls.c` 基于 mbedtls）。
-2. UDP 代理（`proxy_udp.c`）。
-3. `stcp` / visitor / `xtcp` NAT 打洞。
-4. HTTP/HTTPS 代理类型与 `custom_domains` / `subdomain`。
-5. 用 Kconfig 按需裁剪未使用的模块。
-6. 支持 `transport.wireProtocol = v2`。
+1. UDP 代理（`proxy_udp.c`）。
+2. `stcp` / visitor / `xtcp` NAT 打洞。
+3. HTTP/HTTPS 代理类型与 `custom_domains` / `subdomain`。
+4. QUIC 传输（需要 ngtcp2）。
 
 ## 许可证与致谢
 

@@ -2,9 +2,11 @@
 /*
  * ESP32 port: OpenSSL SSL compatibility stub header.
  *
- * TLS is not implemented in the MVP (XFRPC_ENABLE_TLS is off). This header
- * only exists so ssl_compat.h / upstream includes resolve. If TLS gets
- * implemented later it will be via mbedtls with a real shim here.
+ * This is a placeholder, not a TLS implementation: TLS towards frps is
+ * implemented on mbedtls in port/tls.c and does not use any of it. The
+ * symbols exist only so that src/tls.h, src/ssl_compat.h and the
+ * HAVE_NGTCP2 branch of src/quic_client_transport.c (not compiled here)
+ * resolve, and are stubbed out in port/openssl_compat.c.
  */
 
 #ifndef MINI_OPENSSL_SSL_H
