@@ -25,7 +25,7 @@ CONFIG_LWIP_MAX_LISTENING_TCP=16
 # also turns TLS on; leaving the CA empty gives an encrypted but unverified
 # connection, which is what frpc does without caFile.
 #
-CONFIG_XFRPC_ENABLE_TLS=y
+# CONFIG_XFRPC_ENABLE_TLS is not set
 # CA/cert/key can also be compiled in here instead of via the API:
 # CONFIG_XFRPC_TLS_CA_PEM="-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n"
 # CONFIG_XFRPC_TLS_CERT_PEM=""   # mTLS client certificate

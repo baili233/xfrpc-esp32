@@ -26,6 +26,31 @@ menu "xfrpc example configuration"
         string "frps auth token"
         default "esp32-frpc-token"
 
+    config EXAMPLE_FRPS_USER
+        string "frps user name ([common] user)"
+        default ""
+        help
+            The "user" field of [common]. Third-party frp providers
+            (SakuraFrp, etc.) use it to attribute proxies: the wire-level
+            proxy name becomes "{user}.{proxy_name}". Leave empty for a
+            plain self-hosted frps.
+
+    config EXAMPLE_PROXY_NAME
+        string "proxy name registered on frps"
+        default "web"
+        help
+            Name of the proxy section. With EXAMPLE_FRPS_USER set, the
+            server sees "{user}.{name}".
+
+    config EXAMPLE_SNTP_SERVER
+        string "SNTP server for login timestamp"
+        default "ntp.aliyun.com"
+        help
+            The frp token auth key is MD5(token + unix timestamp). The
+            ESP32 has no battery-backed clock, so time must be synced
+            from NTP before logging in, or panel-based providers will
+            reject the login as stale.
+
     config EXAMPLE_HTTP_SERVER_PORT
         int "local HTTP server port (proxy target)"
         default 8080

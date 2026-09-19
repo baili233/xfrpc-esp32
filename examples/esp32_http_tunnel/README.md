@@ -53,6 +53,9 @@ Under **xfrpc example configuration**:
 | `EXAMPLE_FRPS_SERVER_ADDR` | `192.168.1.100` | `frps` host or IP. |
 | `EXAMPLE_FRPS_SERVER_PORT` | `7000` | `frps` bind port (not the remote port). |
 | `EXAMPLE_FRPS_AUTH_TOKEN` | `esp32-frpc-token` | Must match `auth.token` in `frps.toml`/`frps.ini`. |
+| `EXAMPLE_FRPS_USER` | `""` | `[common]` `user`. Required by third-party providers (SakuraFrp, …): the wire-level proxy name becomes `{user}.{proxy_name}`. Empty for a self-hosted `frps`. |
+| `EXAMPLE_PROXY_NAME` | `web` | Name of the proxy section (`[esp32]` in the provider panel). |
+| `EXAMPLE_SNTP_SERVER` | `ntp.aliyun.com` | NTP server used to sync the clock before login (frp token auth signs a unix timestamp). |
 | `EXAMPLE_HTTP_SERVER_PORT` | `8080` | Local port of the on-chip HTTP server. |
 | `EXAMPLE_PROXY_REMOTE_PORT` | `6000` | Port exposed by `frps`. |
 
@@ -70,6 +73,35 @@ that signed the server certificate into
 `.tls_enable = 1` and `.tls_ca_pem = ...` instead. Leaving the CA empty still
 gives you an encrypted connection, it just does not authenticate the server
 (the same thing `frpc` does without `caFile`).
+
+## Third-party frp providers (SakuraFrp, …)
+
+Panel-run `frps` instances work the same as a self-hosted server, with two
+provider specifics to set:
+
+- **`user`** — the provider account name (SakuraFrp: the `user` line of the
+  downloaded `frpc.ini`). With `user` set, the frp protocol sends the proxy as
+  `{user}.{proxy_name}` and the provider maps it to the tunnel created in the
+  panel — the component applies this prefix and its removal automatically, so
+  `EXAMPLE_PROXY_NAME` stays the tunnel name (`esp32` in the example below).
+- **Clock sync** — token auth signs a unix timestamp, and providers reject
+  stale ones. The ESP32 has no battery-backed clock, so the example syncs via
+  SNTP (`EXAMPLE_SNTP_SERVER`) before logging in.
+
+Mapping a SakuraFrp tunnel to the example options:
+
+```ini
+[common]
+user = s-000q2qbede2ef3          # -> EXAMPLE_FRPS_USER
+token = <access key>             # -> EXAMPLE_FRPS_AUTH_TOKEN
+server_addr = test.u33794.nyat.app
+server_port = 8088               # -> EXAMPLE_FRPS_SERVER_ADDR / _PORT
+
+[esp32]                          # section name -> EXAMPLE_PROXY_NAME
+type = tcp
+local_port = 8080                # -> EXAMPLE_HTTP_SERVER_PORT
+remote_port = 61698              # -> EXAMPLE_PROXY_REMOTE_PORT
+```
 
 ## Build, flash, verify
 
@@ -117,6 +149,8 @@ in this path.
 | ------- | ------------ |
 | `wifi: failed to connect to AP` | Wrong SSID/password, or 2.4 GHz-only hardware and a 5 GHz SSID. |
 | `xfrpc: login OK` never appears, log shows a login error | Token mismatch with `frps`, or a `user` restriction on the server. |
+| Provider rejects login, provider log mentions timestamp/auth | Clock not synced: check the `SNTP sync failed` warning and `EXAMPLE_SNTP_SERVER` reachability. |
+| Provider panel shows the proxy as offline / "proxy not found" | `user` set on the server side but not here (or vice versa) — the provider matches tunnels by `{user}.{proxy_name}`. |
 | `xfrpc: connection lost, reconnecting` in a loop | `frps` unreachable, port/token wrong, or the server rejected `tcp_mux = 1`. Set `.tcp_mux = 0` in `main.c` to match a server with mux disabled. |
 | Browser times out but the log says `login OK` | The remote port is blocked by the `frps` firewall or `allow_ports`; test with `curl` on the `frps` host itself first. |
 | `curl` returns the page, but a second concurrent request stalls | One shared stack per proxy in this example: the HTTP server handles one connection at a time. Add a per-connection task if you need concurrency. |

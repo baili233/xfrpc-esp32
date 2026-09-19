@@ -47,6 +47,9 @@ idf.py menuconfig
 | `EXAMPLE_FRPS_SERVER_ADDR` | `192.168.1.100` | `frps` 主机名或 IP。 |
 | `EXAMPLE_FRPS_SERVER_PORT` | `7000` | `frps` 的 bindPort（不是 remote port）。 |
 | `EXAMPLE_FRPS_AUTH_TOKEN` | `esp32-frpc-token` | 必须与 `frps.toml`/`frps.ini` 里的 `auth.token` 一致。 |
+| `EXAMPLE_FRPS_USER` | `""` | `[common]` 的 `user`。第三方 frp 服务（SakuraFrp 等）必需：协议里的代理名会变为 `{user}.{proxy_name}`。自建 `frps` 留空。 |
+| `EXAMPLE_PROXY_NAME` | `web` | 代理段名（面板里创建的隧道名，如 `[esp32]`）。 |
+| `EXAMPLE_SNTP_SERVER` | `ntp.aliyun.com` | 登录前同步时钟用的 NTP 服务器（frp token 认证会签名一个 unix 时间戳）。 |
 | `EXAMPLE_HTTP_SERVER_PORT` | `8080` | 片上 HTTP 服务的本地端口。 |
 | `EXAMPLE_PROXY_REMOTE_PORT` | `6000` | 由 `frps` 暴露出去的端口。 |
 
@@ -60,6 +63,32 @@ idf.py menuconfig
 粘贴到 **Compiled-in CA certificate (PEM)**；也可以不编译进去，改为在 `xfrpc_start()`
 时传 `.tls_enable = 1` 与 `.tls_ca_pem = ...`。CA 留空时连接同样是加密的，只是不认证
 服务端身份（等同 `frpc` 未配 `caFile`）。
+
+## 第三方 frp 服务（SakuraFrp 等）
+
+面板托管的 `frps` 与自建用法一致，但有两个服务商特有的配置项：
+
+- **`user`** —— 服务商账号名（SakuraFrp 为下载的 `frpc.ini` 里的 `user` 行）。设置了
+  `user` 后，frp 协议会把代理以 `{user}.{proxy_name}` 的名字发送，服务商据此对应到面板里
+  创建的隧道。前缀的添加与剥离由组件自动完成，`EXAMPLE_PROXY_NAME` 填隧道名即可
+  （下例中的 `esp32`）。
+- **时钟同步** —— token 认证会对 unix 时间戳签名，服务商普遍拒绝过期时间戳。ESP32
+  没有电池时钟，所以示例在登录前先通过 SNTP（`EXAMPLE_SNTP_SERVER`）对时。
+
+SakuraFrp 隧道配置与示例选项的对应关系：
+
+```ini
+[common]
+user = s-000q2qbede2ef3          # -> EXAMPLE_FRPS_USER
+token = <访问密钥>                # -> EXAMPLE_FRPS_AUTH_TOKEN
+server_addr = test.u33794.nyat.app
+server_port = 8088               # -> EXAMPLE_FRPS_SERVER_ADDR / _PORT
+
+[esp32]                          # 段名 -> EXAMPLE_PROXY_NAME
+type = tcp
+local_port = 8080                # -> EXAMPLE_HTTP_SERVER_PORT
+remote_port = 61698              # -> EXAMPLE_PROXY_REMOTE_PORT
+```
 
 ## 编译、烧录、验证
 
@@ -105,6 +134,8 @@ I (2110) httpd: request: GET /
 | ---- | -------- |
 | `wifi: failed to connect to AP` | SSID/密码错误，或芯片只支持 2.4 GHz 而连的是 5 GHz 热点。 |
 | 一直看不到 `xfrpc: login OK`，日志报登录失败 | token 与 `frps` 不一致，或服务端对该 `user` 有限制。 |
+| 服务商拒绝登录，后台提到时间戳/认证错误 | 时钟没对上：检查 `SNTP sync failed` 警告和 `EXAMPLE_SNTP_SERVER` 是否可达。 |
+| 服务商面板显示隧道离线 / "proxy not found" | 两边 `user` 不一致 —— 服务商按 `{user}.{proxy_name}` 匹配隧道。 |
 | 循环打印 `xfrpc: connection lost, reconnecting` | `frps` 不可达、端口/token 不对，或服务端拒绝 `tcp_mux = 1`（可在 `main.c` 中把 `.tcp_mux` 设为 0 以匹配关闭了 mux 的服务端）。 |
 | 日志显示 `login OK`，但浏览器超时 | `remote_port` 被 `frps` 防火墙或 `allow_ports` 拦住；先在 `frps` 主机上本地 `curl` 验证。 |
 | `curl` 能拿到页面，但第二个并发请求卡住 | 本示例的 HTTP 服务一次只处理一个连接；需要并发时请为每个连接单独建任务。 |
