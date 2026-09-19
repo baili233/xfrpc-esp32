@@ -221,6 +221,29 @@ char *get_auth_key(const char *token, time_t *timestamp)
 }
 
 /**
+ * @brief Strips the "{user}." prefix from a wire-level proxy name
+ *
+ * @param wire_name Proxy name as sent by frps (NewProxyResp / StartWorkConn)
+ * @return const char* Pointer into wire_name past the prefix, or wire_name
+ *                     itself when no user is set or it is not prefixed
+ *
+ * Mirror of the prefixing in new_proxy_service_marshal(): the frp client
+ * sends proxy names as "{user}.{name}" when common.user is set, and frps
+ * echoes that prefixed name back (frp pkg/naming.StripUserPrefix).
+ */
+const char *xfrpc_strip_user_prefix(const char *wire_name)
+{
+	struct common_conf *cf = get_common_config();
+	if (!wire_name || !cf || !cf->user || !cf->user[0])
+		return wire_name;
+
+	size_t ulen = strlen(cf->user);
+	if (strncmp(wire_name, cf->user, ulen) == 0 && wire_name[ulen] == '.')
+		return wire_name + ulen + 1;
+	return wire_name;
+}
+
+/**
  * @brief Marshals login request data into a JSON string
  *
  * @param msg Pointer to store the resulting JSON string
@@ -337,8 +360,24 @@ int new_proxy_service_marshal(const struct proxy_service *np_req, char **msg)
 	struct json_object *j_np_req = json_object_new_object();
 	if (!j_np_req) return 0;
 
-	// Add basic proxy configuration
-	JSON_MARSHAL_TYPE(j_np_req, "proxy_name", string, np_req->proxy_name);
+	// Add basic proxy configuration. frp protocol: with common.user set, the
+	// wire-level proxy name is "{user}.{name}" (frp pkg/naming.AddUserPrefix);
+	// panel-integrated frps (SakuraFrp etc.) key their tunnel registry on
+	// this full name, so the bare local name is never seen by the server.
+	const char *wire_name = np_req->proxy_name;
+	struct common_conf *cf = get_common_config();
+	if (cf && cf->user && cf->user[0]) {
+		char *prefixed = malloc(strlen(cf->user) + 1 + strlen(np_req->proxy_name) + 1);
+		if (!prefixed) {
+			json_object_put(j_np_req);
+			return 0;
+		}
+		sprintf(prefixed, "%s.%s", cf->user, np_req->proxy_name);
+		JSON_MARSHAL_TYPE(j_np_req, "proxy_name", string, prefixed);
+		free(prefixed);
+	} else {
+		JSON_MARSHAL_TYPE(j_np_req, "proxy_name", string, wire_name);
+	}
 	
 	// Handle proxy type - normalize socks5/mstsc/iod to tcp, keep tcpmux as-is
 	const char *proxy_type;
@@ -606,10 +645,11 @@ struct new_proxy_response *new_proxy_resp_unmarshal(const char *jres)
 		}
 	}
 
-	// Get required proxy_name field
+	// Get required proxy_name field. Strip the "{user}." prefix frps echoes
+	// back so callers match it against the locally configured proxy name.
 	struct json_object *j_proxy_name = NULL;
 	if (!json_object_object_get_ex(j_np_res, "proxy_name", &j_proxy_name) ||
-		!(npr->proxy_name = strdup(json_object_get_string(j_proxy_name)))) {
+		!(npr->proxy_name = strdup(xfrpc_strip_user_prefix(json_object_get_string(j_proxy_name))))) {
 		goto error;
 	}
 
@@ -735,7 +775,8 @@ struct start_work_conn_resp *start_work_conn_resp_unmarshal(const char *resp_msg
 		goto error;
 	}
 
-	sr->proxy_name = strdup(proxy_name);
+	/* strip the "{user}." prefix frps echoes back (see new_proxy_service_marshal) */
+	sr->proxy_name = strdup(xfrpc_strip_user_prefix(proxy_name));
 	if (!sr->proxy_name) {
 		goto error;
 	}

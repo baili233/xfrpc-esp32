@@ -1311,6 +1311,21 @@ static int handle_login_response(const uint8_t *buf, int len)
 	// ESP32 port: report login success to the public API callback
 	xfrpc_report_state(XFRPC_STATE_LOGIN_OK);
 
+	/* Official frpc registers all proxies right after a successful login
+	 * (Control.Run -> pm.UpdateAll); it does not wait for the server's
+	 * ReqWorkConn. Native frps sends pool_count ReqWorkConn messages
+	 * immediately after LoginResp, which masked xfrpc's wait-for-ReqWorkConn
+	 * ordering — but on-demand providers (SakuraFrp etc.) only ask for work
+	 * connections once a visitor arrives, which never happens because the
+	 * proxy was never registered: both sides wait, and the client times
+	 * itself out after heartbeat_timeout. Register now and mark the
+	 * control connection as up so heartbeats flow; a later ReqWorkConn
+	 * just adds the work connection (handle_type_req_work_conn). */
+	if (!is_xfrpc_connected()) {
+		start_proxy_services();
+		set_xfrpc_status(true);
+	}
+
 	int login_len = msg_hton(mhdr->length);
 	int consumed = login_len + sizeof(struct msg_hdr);
 	int remaining_len = len - consumed;

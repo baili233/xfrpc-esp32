@@ -107,6 +107,9 @@ size_t login_request_marshal(char **msg);
 // Authentication helper
 char *get_auth_key(const char *token, time_t *timestamp);
 
+// Wire-name helper: strip the "{user}." prefix frps echoes back
+const char *xfrpc_strip_user_prefix(const char *wire_name);
+
 // Unmarshalling functions (Parse JSON to structures)
 struct new_proxy_response *new_proxy_resp_unmarshal(const char *jres);
 struct login_resp *login_resp_unmarshal(const char *jres);
