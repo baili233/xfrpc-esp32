@@ -12,6 +12,7 @@
 
 #define MAX_RETRY_TIMES 100
 #define RETRY_DELAY_SECONDS 2
+#define MAX_RETRY_DELAY_SECONDS 60
 
 /**
  * @brief Main control structure for FRP client

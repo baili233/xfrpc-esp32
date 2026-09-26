@@ -81,6 +81,7 @@ static void handle_control_work(const uint8_t *buf, int len, void *ctx);
 static int handle_login_response(const uint8_t *buf, int len);
 static void health_check_result_cb(struct proxy_service *ps, int healthy, void *ctx);
 static void reconnect_timer_cb(evutil_socket_t fd, short what, void *ctx);
+static int reconnect_backoff_seconds(int retry_count);
 
 /**
  * Check if xfrpc client is connected to server
@@ -1813,6 +1814,23 @@ static void recv_cb(struct bufferevent *bev, void *ctx)
 }
 
 /**
+ * Returns the reconnection delay for the given retry count.
+ * Uses exponential backoff: 2s, 4s, 8s, 16s, 32s, then capped at 60s.
+ */
+static int reconnect_backoff_seconds(int retry_count)
+{
+	int shift = retry_count - 1;
+	if (shift < 0)
+		shift = 0;
+	if (shift > 5)
+		shift = 5;
+	int delay = RETRY_DELAY_SECONDS << shift;
+	if (delay > MAX_RETRY_DELAY_SECONDS)
+		delay = MAX_RETRY_DELAY_SECONDS;
+	return delay;
+}
+
+/**
  * @brief Timer callback for deferred reconnection after connection failure.
  *
  * This callback runs outside the bufferevent callback stack, avoiding
@@ -1844,23 +1862,36 @@ static void reconnect_timer_cb(evutil_socket_t fd, short what, void *ctx)
  * @note This function modifies the retry_times parameter to track retry attempts
  */
 static void handle_connection_failure(struct common_conf *c_conf, int *retry_times) {
-	debug(LOG_ERR, "Connection to server [%s:%d] failed: %s", 
-		  c_conf->server_addr, 
-		  c_conf->server_port,
-		  strerror(errno));
-
 	(*retry_times)++;
-	if (*retry_times >= MAX_RETRY_TIMES) {
-		debug(LOG_INFO, "Maximum retry attempts (%d) reached", MAX_RETRY_TIMES);
+
+	/* Log at ERR level only for the first few failures; after that,
+	 * downgrade to INFO and report less frequently to avoid log spam
+	 * when the server is intentionally unavailable. */
+	if (*retry_times <= 5) {
+		debug(LOG_ERR, "Connection to server [%s:%d] failed (attempt %d): %s",
+			  c_conf->server_addr,
+			  c_conf->server_port,
+			  *retry_times,
+			  strerror(errno));
+	} else if (*retry_times % 10 == 0) {
+		debug(LOG_INFO, "Connection to server [%s:%d] still unavailable (attempt %d)",
+			  c_conf->server_addr,
+			  c_conf->server_port,
+			  *retry_times);
 	}
 
-	/* Use an async timer instead of blocking sleep().
-	 * This keeps the event loop responsive during the delay and avoids
-	 * destroying the current bufferevent from within its own callback. */
+	int delay = reconnect_backoff_seconds(*retry_times);
+	/* Guard against leaking a pending timer if this function is ever
+	 * called again before the previous reconnect fires. */
+	if (main_ctl->reconnect_timer) {
+		evtimer_del(main_ctl->reconnect_timer);
+		event_free(main_ctl->reconnect_timer);
+		main_ctl->reconnect_timer = NULL;
+	}
 	main_ctl->reconnect_timer = evtimer_new(main_ctl->connect_base,
 			reconnect_timer_cb, NULL);
 	if (main_ctl->reconnect_timer) {
-		struct timeval tv = {RETRY_DELAY_SECONDS, 0};
+		struct timeval tv = {delay, 0};
 		evtimer_add(main_ctl->reconnect_timer, &tv);
 	} else {
 		debug(LOG_ERR, "Failed to create reconnect timer, falling back to immediate retry");
@@ -1925,6 +1956,12 @@ static void connect_event_cb(struct bufferevent *bev, short what, void *ctx)
 	}
 
 	if (what & (BEV_EVENT_EOF|BEV_EVENT_ERROR)) {
+		/* Stop the failed bufferevent immediately: mini_event does not
+		 * free or disable it on error, so an errored socket stays armed
+		 * in the loop and re-fires this callback hundreds of times per
+		 * second until clear_main_control() frees it. Disabling here
+		 * makes the reconnect timer the sole driver of retries. */
+		bufferevent_disable(bev, EV_READ|EV_WRITE);
 		debug(LOG_DEBUG, "connect_event_cb error: what=0x%x, tls=%d", what, xfrpc_tls_is_enabled());
 		if (xfrpc_tls_is_enabled()) {
 			xfrpc_tls_log_errors("TLS connection");
@@ -1935,7 +1972,11 @@ static void connect_event_cb(struct bufferevent *bev, short what, void *ctx)
 			ERR_error_string_n(ssl_err, buf, sizeof(buf));
 			debug(LOG_DEBUG, "SSL error: %s", buf);
 		}
-		debug(LOG_ERR, "connect_event_cb disconnect event: what=0x%x", what);
+		/* Throttle: only log the disconnect event at ERR level for the
+		 * first few retries to avoid log spam when the server is down. */
+		if (retry_times < 5) {
+			debug(LOG_ERR, "connect_event_cb disconnect event: what=0x%x", what);
+		}
 		handle_connection_failure(c_conf, &retry_times);
 	} 
 	else if (what & BEV_EVENT_CONNECTED) {
