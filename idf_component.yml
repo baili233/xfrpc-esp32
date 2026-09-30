@@ -1,0 +1,11 @@
+version: "0.1.0"
+description: ESP-IDF port of xfrpc, a lightweight frp client for ESP32
+url: https://github.com/baili233/xfrpc-esp32
+repository: https://github.com/baili233/xfrpc-esp32.git
+license: GPL-3.0-only
+tags:
+  - frp
+  - tunnel
+  - nat
+dependencies:
+  idf: ">=5.1"

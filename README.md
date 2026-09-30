@@ -8,10 +8,10 @@ to the ESP32 series, so an MCU behind NAT can publish its local TCP services to 
 public `frps` server without a full Linux userland.
 
 The upstream code is not rewritten: it is compiled as-is inside the component
-(`components/xfrpc/src/`), and the POSIX/libevent/OpenSSL/json-c dependencies are
-satisfied by a thin porting layer (`components/xfrpc/port/`) built on ESP-IDF's own
-mbedtls, cJSON and lwIP. Only a handful of lines in `src/` are marked
-`// ESP32 port:` where a Linux-only call had to be replaced.
+(`src/`), and the POSIX/libevent/OpenSSL/json-c dependencies are satisfied by
+a thin porting layer (`port/`) built on ESP-IDF's own mbedtls, cJSON and lwIP.
+Only a handful of lines in `src/` are marked `// ESP32 port:` where a
+Linux-only call had to be replaced.
 
 ## Features
 
@@ -44,25 +44,24 @@ default in modern `frps` releases.
 
 ```
 xfrpc-esp32/
-├── components/
-│   └── xfrpc/                 ESP-IDF component
-│       ├── include/xfrpc.h    public API
-│       ├── src/               upstream xfrpc core (see upstream LICENSE)
-│       ├── port/              ESP32 porting layer
-│       │   ├── mini_event.c   minimal libevent replacement
-│       │   ├── mini_event_ssl.c  mbedtls backend for the bufferevent (TLS)
-│       │   ├── tls.c          mbedtls TLS for the frps control connection (TLS)
-│       │   ├── wire_v2_off.c  wire_protocol_is_v2() == 0 when v2 is off
-│       │   ├── openssl_compat.c  OpenSSL EVP/HMAC/MD5 -> mbedtls
-│       │   ├── json_compat.c  json-c -> cJSON
-│       │   ├── esp_platform.c uname(), fatal handling, commandline/syslog stubs
-│       │   ├── module_stubs.c weak stubs for modules not compiled in
-│       │   └── xfrpc_api.c    xfrpc_start()/xfrpc_stop() implementation
-│       ├── vendor/            snappy, uthash, tomlc17
-│       ├── CMakeLists.txt
-│       └── Kconfig
+├── CMakeLists.txt             ESP-IDF component registration
+├── Kconfig                    component options (`idf.py menuconfig` -> xfrpc)
+├── idf_component.yml          ESP Component Manager metadata
+├── include/xfrpc.h            public API
+├── src/                       upstream xfrpc core (see upstream LICENSE)
+├── port/                      ESP32 porting layer
+│   ├── mini_event.c           minimal libevent replacement
+│   ├── mini_event_ssl.c       mbedtls backend for the bufferevent (TLS)
+│   ├── tls.c                  mbedtls TLS for the frps control connection (TLS)
+│   ├── wire_v2_off.c          wire_protocol_is_v2() == 0 when v2 is off
+│   ├── openssl_compat.c       OpenSSL EVP/HMAC/MD5 -> mbedtls
+│   ├── json_compat.c          json-c -> cJSON
+│   ├── esp_platform.c         uname(), fatal handling, commandline/syslog stubs
+│   ├── module_stubs.c         weak stubs for modules not compiled in
+│   └── xfrpc_api.c            xfrpc_start()/xfrpc_stop() implementation
+├── vendor/                    snappy, uthash, tomlc17
 ├── examples/
-│   └── esp32_http_tunnel/     standalone ESP-IDF project
+│   └── esp32_http_tunnel/     standalone ESP-IDF usage example
 └── LICENSE                    GPL-3.0-only (inherited from upstream)
 ```
 
@@ -108,11 +107,24 @@ idf.py build
 
 ## Using the component in your own project
 
-Copy `components/xfrpc/` into your project's `components/` directory, or point at it
-from your project `CMakeLists.txt`:
+The repository root is the component directory. Use it in one of these ways:
+
+1. Let the ESP Component Manager fetch it from Git:
+
+```yaml
+# main/idf_component.yml
+dependencies:
+  xfrpc:
+    git: https://github.com/baili233/xfrpc-esp32.git
+```
+
+2. Clone or copy the repository into your project as `components/xfrpc`.
+
+3. Keep it outside the project and point `EXTRA_COMPONENT_DIRS` at the
+repository root:
 
 ```cmake
-set(EXTRA_COMPONENT_DIRS "/path/to/xfrpc-esp32/components")
+set(EXTRA_COMPONENT_DIRS "/path/to/xfrpc-esp32")
 ```
 
 The component is built with `XFRPC_DEBUG` defined and logs through `esp_log`; runtime
@@ -304,7 +316,7 @@ Two notes:
 - This component is licensed under **GPL-3.0-only**, inherited from upstream
   xfrpc. See [LICENSE](LICENSE).
 - Upstream xfrpc: <https://github.com/liudf0716/xfrpc> — Copyright (c) Dengfeng Liu
-  and contributors. The files under `components/xfrpc/src/` are his work, adapted
+  and contributors. The files under `src/` are his work, adapted
   for ESP-IDF where marked.
 - frp protocol: <https://github.com/fatedier/frp>.
 - Vendored third-party code: [snappy](https://github.com/google/snappy) and

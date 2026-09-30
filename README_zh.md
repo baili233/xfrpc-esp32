@@ -6,8 +6,8 @@
 客户端的轻量 C 语言实现）移植到 ESP32 系列的 ESP-IDF 组件。处于 NAT 后的 ESP32 无需完整
 Linux 用户态，即可把本地 TCP 服务发布到公网的 `frps` 服务器。
 
-上游代码没有被改写：它以原样编译在组件内（`components/xfrpc/src/`），而 POSIX /
-libevent / OpenSSL / json-c 这些依赖由一层薄的移植层（`components/xfrpc/port/`）用
+上游代码没有被改写：它以原样编译在组件内（`src/`），而 POSIX /
+libevent / OpenSSL / json-c 这些依赖由一层薄的移植层（`port/`）用
 ESP-IDF 自带的 mbedtls、cJSON 和 lwIP 实现。`src/` 中只有少量几行用 `// ESP32 port:`
 标注，是必须替换掉的 Linux 专有调用。
 
@@ -39,25 +39,24 @@ TLS、wire protocol v2、snappy 和健康检查各自有一个 Kconfig 开关，
 
 ```
 xfrpc-esp32/
-├── components/
-│   └── xfrpc/                 ESP-IDF 组件
-│       ├── include/xfrpc.h    公共 API
-│       ├── src/               上游 xfrpc 核心（版权见上游 LICENSE）
-│       ├── port/              ESP32 移植层
-│       │   ├── mini_event.c   libevent 最小替代实现
-│       │   ├── mini_event_ssl.c  bufferevent 的 mbedtls 后端（TLS）
-│       │   ├── tls.c          控制连接的 mbedtls TLS 实现（TLS）
-│       │   ├── wire_v2_off.c  关闭 v2 时的 wire_protocol_is_v2() == 0
-│       │   ├── openssl_compat.c  OpenSSL EVP/HMAC/MD5 -> mbedtls
-│       │   ├── json_compat.c  json-c -> cJSON
-│       │   ├── esp_platform.c uname()、致命错误处理、命令行/syslog 占位
-│       │   ├── module_stubs.c 未编译模块的 weak 占位
-│       │   └── xfrpc_api.c    xfrpc_start()/xfrpc_stop() 实现
-│       ├── vendor/            snappy、uthash
-│       ├── CMakeLists.txt
-│       └── Kconfig
+├── CMakeLists.txt             ESP-IDF 组件注册文件
+├── Kconfig                    组件配置项（`idf.py menuconfig` -> xfrpc）
+├── idf_component.yml          ESP Component Manager 元数据
+├── include/xfrpc.h            公共 API
+├── src/                       上游 xfrpc 核心（版权见上游 LICENSE）
+├── port/                      ESP32 移植层
+│   ├── mini_event.c           libevent 最小替代实现
+│   ├── mini_event_ssl.c       bufferevent 的 mbedtls 后端（TLS）
+│   ├── tls.c                  控制连接的 mbedtls TLS 实现（TLS）
+│   ├── wire_v2_off.c          关闭 v2 时的 wire_protocol_is_v2() == 0
+│   ├── openssl_compat.c       OpenSSL EVP/HMAC/MD5 -> mbedtls
+│   ├── json_compat.c          json-c -> cJSON
+│   ├── esp_platform.c         uname()、致命错误处理、命令行/syslog 占位
+│   ├── module_stubs.c         未编译模块的 weak 占位
+│   └── xfrpc_api.c            xfrpc_start()/xfrpc_stop() 实现
+├── vendor/                    snappy、uthash、tomlc17
 ├── examples/
-│   └── esp32_http_tunnel/     独立 ESP-IDF 工程
+│   └── esp32_http_tunnel/     独立 ESP-IDF 使用示例
 └── LICENSE                    GPL-3.0-only（继承自上游）
 ```
 
@@ -100,10 +99,23 @@ idf.py build
 
 ## 在自己的工程中使用本组件
 
-把 `components/xfrpc/` 拷进你工程的 `components/` 目录，或在工程 `CMakeLists.txt` 中指向它：
+仓库根目录本身就是组件目录，可以直接通过以下任一方式使用：
+
+1. 通过 ESP Component Manager 从 Git 引入：
+
+```yaml
+# main/idf_component.yml
+dependencies:
+  xfrpc:
+    git: https://github.com/baili233/xfrpc-esp32.git
+```
+
+2. 克隆或拷贝本仓库到你工程的 `components/xfrpc`。
+
+3. 仓库放在工程外时，把组件搜索路径指向仓库根目录：
 
 ```cmake
-set(EXTRA_COMPONENT_DIRS "/path/to/xfrpc-esp32/components")
+set(EXTRA_COMPONENT_DIRS "/path/to/xfrpc-esp32")
 ```
 
 组件以 `XFRPC_DEBUG` 宏编译，日志走 `esp_log`，运行时详细程度由
@@ -281,7 +293,7 @@ IP 时会自动跳过（mbedtls 的 `set_hostname` 只接受域名）。
 
 - 本组件遵循上游 xfrpc 的 **GPL-3.0-only** 许可，见 [LICENSE](LICENSE)。
 - 上游 xfrpc：<https://github.com/liudf0716/xfrpc>，版权归 Dengfeng Liu 及贡献者所有。
-  `components/xfrpc/src/` 下的文件为其作品，标注处为适配 ESP-IDF 所做的修改。
+  `src/` 下的文件为其作品，标注处为适配 ESP-IDF 所做的修改。
 - frp 协议：<https://github.com/fatedier/frp>。
 - 内置第三方代码：[snappy](https://github.com/google/snappy) 与
   [uthash](https://github.com/troydhanson/uthash)，各自遵循其原始许可。

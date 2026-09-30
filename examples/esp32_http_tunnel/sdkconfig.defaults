@@ -18,7 +18,7 @@ CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=n
 CONFIG_LWIP_MAX_ACTIVE_TCP=16
 CONFIG_LWIP_MAX_LISTENING_TCP=16
 
-# ---- xfrpc optional modules (see components/xfrpc/Kconfig) ----
+# ---- xfrpc optional modules (see ../../Kconfig) ----
 # All off by default in a fresh project; turn on what your frps needs.
 #
 # TLS to frps (frps transport.tls.force). Setting any of the three PEM values
