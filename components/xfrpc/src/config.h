@@ -7,6 +7,8 @@
 #ifndef XFRPC_CONFIG_H
 #define XFRPC_CONFIG_H
 
+#include <stddef.h>
+
 #include "client.h"
 #include "common.h"
 
@@ -89,6 +91,8 @@ struct common_conf *get_common_config(void);
 struct common_conf *init_common_config(void); /* ESP32 port: API config entry */
 void free_common_config(void);
 void load_config(const char *confile);
+int load_config_file(const char *confile, int format);
+int load_config_string(const char *text, size_t len, int format);
 int validate_heartbeat_config(void);
 
 /* Proxy service management functions */

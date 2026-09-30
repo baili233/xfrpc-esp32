@@ -125,7 +125,7 @@ config XFRPC_ENABLE_HEALTH_CHECK
     default n
     help
         Compile src/health_check.c. Only useful with proxy services that
-        set health_check_type (not reachable through the public API yet, so
+        set health_check_type (available through INI/TOML configuration, so
         this is off by default).
 
 endmenu

@@ -18,6 +18,7 @@
 struct toml_doc;
 
 int xfrpc_toml_parse_file(const char *path, struct toml_doc **doc);
+int xfrpc_toml_parse_string(const char *src, size_t len, struct toml_doc **doc);
 void xfrpc_toml_doc_free(struct toml_doc *doc);
 void *xfrpc_toml_find_array_section(struct toml_doc *doc, const char *prefix, int index);
 int xfrpc_toml_count_array_sections(struct toml_doc *doc, const char *prefix);
@@ -35,6 +36,7 @@ const char *xfrpc_toml_get_table_pairs(void *sec, const char *path);
  * includes tomlc17.h first, conflicting with these names) */
 #ifndef TOML_PARSER_INTERNAL
 #define toml_parse_file(path, doc)             xfrpc_toml_parse_file(path, doc)
+#define toml_parse_string(src, len, doc)       xfrpc_toml_parse_string(src, len, doc)
 #define toml_doc_free(doc)                     xfrpc_toml_doc_free(doc)
 #define toml_find_array_section(doc, pre, idx) xfrpc_toml_find_array_section(doc, pre, idx)
 #define toml_count_array_sections(doc, pre)    xfrpc_toml_count_array_sections(doc, pre)

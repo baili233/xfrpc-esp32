@@ -23,6 +23,7 @@ mbedtls, cJSON and lwIP. Only a handful of lines in `src/` are marked
 | `use_compression` (snappy) | Yes (optional at build time) |
 | Heartbeat / automatic reconnect | Yes |
 | Programmatic configuration via public API | Yes |
+| INI / TOML configuration from file or string | Yes |
 | TLS control connection | Yes (mbedtls, optional at build time), incl. mTLS |
 | UDP proxy | Not yet (stub) |
 | `stcp` / visitor / `xtcp` (P2P) | Not yet (stub) |
@@ -57,7 +58,7 @@ xfrpc-esp32/
 │       │   ├── esp_platform.c uname(), fatal handling, commandline/syslog stubs
 │       │   ├── module_stubs.c weak stubs for modules not compiled in
 │       │   └── xfrpc_api.c    xfrpc_start()/xfrpc_stop() implementation
-│       ├── vendor/            snappy, uthash
+│       ├── vendor/            snappy, uthash, tomlc17
 │       ├── CMakeLists.txt
 │       └── Kconfig
 ├── examples/
@@ -152,10 +153,40 @@ allocated. It launches a dedicated FreeRTOS task and returns immediately:
 | `1`  | already running |
 | `-1` | invalid configuration or task creation failed |
 
+INI and TOML configurations can be loaded from the ESP-IDF VFS or from memory:
+
+```c
+/* Auto-detect by extension: .toml selects TOML, otherwise INI. */
+xfrpc_start_from_file("/fs/xfrpc.toml",
+                      XFRPC_CONFIG_FORMAT_AUTO,
+                      on_state, NULL);
+
+static const char toml[] =
+    "serverAddr = \"203.0.113.10\"\n"
+    "serverPort = 7000\n"
+    "auth.token = \"secret\"\n"
+    "[[proxies]]\n"
+    "name = \"web\"\n"
+    "type = \"tcp\"\n"
+    "localIP = \"127.0.0.1\"\n"
+    "localPort = 80\n"
+    "remotePort = 6000\n";
+
+xfrpc_start_from_string(toml, sizeof(toml) - 1,
+                        XFRPC_CONFIG_FORMAT_TOML,
+                        on_state, NULL);
+```
+
+For strings, `XFRPC_CONFIG_FORMAT_AUTO` recognizes common frp TOML keys such as
+`serverAddr`, `auth.token` and `[[proxies]]`; pass the explicit format when the
+configuration is ambiguous.
+
 The other entry points are:
 
 | Function | Description |
 | -------- | ----------- |
+| `xfrpc_start_from_file(path, format, cb, user)` | Load an INI/TOML file and start. |
+| `xfrpc_start_from_string(text, len, format, cb, user)` | Load INI/TOML text and start. |
 | `xfrpc_stop(void)` | Request a clean stop; the task exits asynchronously. Safe from any task. |
 | `xfrpc_is_connected(void)` | `true` while the control connection is up and logged in. |
 
@@ -208,6 +239,11 @@ Measured effect on the example app binary (ESP32-S3, `esp32_http_tunnel`,
 | `n` | `y` | `y` | `y` | 897,904 B (0xdb370) | 14% |
 | `y` | `n` | `n` | `n` | 956,864 B (0xe99c0) | 9% |
 | `y` | `y` | `y` | `y` | 975,248 B (0xee190) | 7% |
+
+These measurements predate the built-in INI/TOML parser. With configuration
+parsing enabled, the default example is currently 920,528 B (0xe0bd0), leaving
+12% free in the 1 MB app partition; the optional-module rows move by roughly
+the same parser delta.
 
 The all-off build is the new default and the smallest; the all-on build is
 still 7% inside a 1 MB app partition. Enabling TLS pulls in the mbedtls TLS
@@ -272,4 +308,5 @@ Two notes:
   for ESP-IDF where marked.
 - frp protocol: <https://github.com/fatedier/frp>.
 - Vendored third-party code: [snappy](https://github.com/google/snappy) and
-  [uthash](https://github.com/troydhanson/uthash), both under their own licenses.
+  [uthash](https://github.com/troydhanson/uthash), and
+  [tomlc17](https://github.com/cktan/tomlc17), each under its own license.

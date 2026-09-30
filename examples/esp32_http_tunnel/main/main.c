@@ -5,7 +5,7 @@
  * Boot sequence:
  *   1. connect WiFi (station)
  *   2. start a local HTTP server serving a test page (proxy target)
- *   3. start the xfrpc component against the frps server from Kconfig
+ *   3. build an INI config from Kconfig and start xfrpc from that string
  */
 
 #include <stdio.h>
@@ -66,31 +66,46 @@ void app_main(void)
     /* MD5(token+timestamp) auth needs a real clock (see sync_time_from_ntp). */
     sync_time_from_ntp();
 
-    xfrpc_client_config_t cfg = {
-        .server_addr = CONFIG_EXAMPLE_FRPS_SERVER_ADDR,
-        .server_port = CONFIG_EXAMPLE_FRPS_SERVER_PORT,
-        .auth_token  = CONFIG_EXAMPLE_FRPS_AUTH_TOKEN,
-        .user        = CONFIG_EXAMPLE_FRPS_USER,
-        .tcp_mux     = 1,   /* match frps default */
-    };
-    xfrpc_tcp_proxy_t proxies[] = {
-        {
-            .name            = CONFIG_EXAMPLE_PROXY_NAME,
-            .local_ip        = "127.0.0.1",
-            .local_port      = CONFIG_EXAMPLE_HTTP_SERVER_PORT,
-            .remote_port     = CONFIG_EXAMPLE_PROXY_REMOTE_PORT,
-            .use_encryption  = 0,
-            .use_compression = 0,
-        },
-    };
+    char config[512];
+    int config_len = snprintf(
+        config, sizeof(config),
+        "[common]\n"
+        "user = %s\n"
+        "token = %s\n"
+        "\n"
+        "tls_enable = false\n"
+        "disable_custom_tls_first_byte = false\n"
+        "\n"
+        "server_addr = %s\n"
+        "server_port = %d\n"
+        "\n"
+        "[%s]\n"
+        "type = tcp\n"
+        "local_ip = 127.0.0.1\n"
+        "local_port = %d\n"
+        "remote_port = %d\n",
+        CONFIG_EXAMPLE_FRPS_USER,
+        CONFIG_EXAMPLE_FRPS_AUTH_TOKEN,
+        CONFIG_EXAMPLE_FRPS_SERVER_ADDR,
+        CONFIG_EXAMPLE_FRPS_SERVER_PORT,
+        CONFIG_EXAMPLE_PROXY_NAME,
+        CONFIG_EXAMPLE_HTTP_SERVER_PORT,
+        CONFIG_EXAMPLE_PROXY_REMOTE_PORT);
+    if (config_len < 0 || config_len >= (int)sizeof(config)) {
+        ESP_LOGE(TAG, "xfrpc config buffer too small");
+        return;
+    }
 
     ESP_LOGI(TAG, "xfrpc: %s:%d user=%s proxy=%s -> remote %d",
-             cfg.server_addr, cfg.server_port,
-             cfg.user[0] ? cfg.user : "-",
-             proxies[0].name, proxies[0].remote_port);
+             CONFIG_EXAMPLE_FRPS_SERVER_ADDR, CONFIG_EXAMPLE_FRPS_SERVER_PORT,
+             CONFIG_EXAMPLE_FRPS_USER[0] ? CONFIG_EXAMPLE_FRPS_USER : "-",
+             CONFIG_EXAMPLE_PROXY_NAME,
+             CONFIG_EXAMPLE_PROXY_REMOTE_PORT);
 
-    int rc = xfrpc_start(&cfg, proxies, 1, on_xfrpc_state, NULL);
+    int rc = xfrpc_start_from_string(config, (size_t)config_len,
+                                     XFRPC_CONFIG_FORMAT_INI,
+                                     on_xfrpc_state, NULL);
     if (rc != 0) {
-        ESP_LOGE(TAG, "xfrpc_start failed (%d)", rc);
+        ESP_LOGE(TAG, "xfrpc_start_from_string failed (%d)", rc);
     }
 }

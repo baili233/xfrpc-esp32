@@ -14,21 +14,21 @@ menu "xfrpc example configuration"
 
     config EXAMPLE_FRPS_SERVER_ADDR
         string "frps server address"
-        default "192.168.1.100"
+        default "frp-can.com"
         help
             IP address (or hostname) of the frps server.
 
     config EXAMPLE_FRPS_SERVER_PORT
         int "frps server port"
-        default 7000
+        default 8088
 
     config EXAMPLE_FRPS_AUTH_TOKEN
         string "frps auth token"
-        default "esp32-frpc-token"
+        default "bede95468e552ef3"
 
     config EXAMPLE_FRPS_USER
         string "frps user name ([common] user)"
-        default ""
+        default "s-000q2qbede2ef3"
         help
             The "user" field of [common]. Third-party frp providers
             (SakuraFrp, etc.) use it to attribute proxies: the wire-level
@@ -37,7 +37,7 @@ menu "xfrpc example configuration"
 
     config EXAMPLE_PROXY_NAME
         string "proxy name registered on frps"
-        default "web"
+        default "test"
         help
             Name of the proxy section. With EXAMPLE_FRPS_USER set, the
             server sees "{user}.{name}".
@@ -57,6 +57,6 @@ menu "xfrpc example configuration"
 
     config EXAMPLE_PROXY_REMOTE_PORT
         int "remote port exposed on frps"
-        default 6000
+        default 16683
 
 endmenu

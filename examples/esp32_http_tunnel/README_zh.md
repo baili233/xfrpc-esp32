@@ -18,8 +18,9 @@
 1. `app_wifi_connect()` —— 连接 menuconfig 中配置的 AP，并等待拿到 IP（超时 30 秒，重试 10 次）。
 2. `http_server_start()` —— 启动一个基于 lwIP socket 的小 HTTP 服务，对任何请求都返回同一个
    静态页面，用来代替“你真正想暴露的那个服务”。
-3. `xfrpc_start()` —— 连接 `frps`、用配置的 token 登录，并注册一条把
-   `127.0.0.1:<local_port>` 映射到 `frps:<remote_port>` 的 TCP 代理。
+3. `xfrpc_start_from_string()` —— 加载内置 INI 配置、连接 `frps`、用配置的
+   token 登录，并注册一条把 `127.0.0.1:<local_port>` 映射到
+   `frps:<remote_port>` 的 TCP 代理。
 
 组件的状态变化由 `on_xfrpc_state()` 回调打印（`connecting`、`connected`、`login OK`、
 `reconnecting`、`stopped`、`fatal`）。
@@ -44,14 +45,14 @@ idf.py menuconfig
 | ---- | ------ | ---- |
 | `EXAMPLE_WIFI_SSID` | `myssid` | 要连接的 AP。 |
 | `EXAMPLE_WIFI_PASSWORD` | `mypassword` | AP 密码。 |
-| `EXAMPLE_FRPS_SERVER_ADDR` | `192.168.1.100` | `frps` 主机名或 IP。 |
-| `EXAMPLE_FRPS_SERVER_PORT` | `7000` | `frps` 的 bindPort（不是 remote port）。 |
-| `EXAMPLE_FRPS_AUTH_TOKEN` | `esp32-frpc-token` | 必须与 `frps.toml`/`frps.ini` 里的 `auth.token` 一致。 |
-| `EXAMPLE_FRPS_USER` | `""` | `[common]` 的 `user`。第三方 frp 服务（SakuraFrp 等）必需：协议里的代理名会变为 `{user}.{proxy_name}`。自建 `frps` 留空。 |
-| `EXAMPLE_PROXY_NAME` | `web` | 代理段名（面板里创建的隧道名，如 `[esp32]`）。 |
+| `EXAMPLE_FRPS_SERVER_ADDR` | `frp-can.com` | `frps` 主机名或 IP。 |
+| `EXAMPLE_FRPS_SERVER_PORT` | `8088` | `frps` 的 bindPort（不是 remote port）。 |
+| `EXAMPLE_FRPS_AUTH_TOKEN` | `bede95468e552ef3` | 必须与 `frps.toml`/`frps.ini` 里的 `auth.token` 一致。 |
+| `EXAMPLE_FRPS_USER` | `s-000q2qbede2ef3` | `[common]` 的 `user`。第三方 frp 服务（SakuraFrp 等）必需：协议里的代理名会变为 `{user}.{proxy_name}`。自建 `frps` 留空。 |
+| `EXAMPLE_PROXY_NAME` | `test` | 代理段名（面板里创建的隧道名，如 `[test]`）。 |
 | `EXAMPLE_SNTP_SERVER` | `ntp.aliyun.com` | 登录前同步时钟用的 NTP 服务器（frp token 认证会签名一个 unix 时间戳）。 |
 | `EXAMPLE_HTTP_SERVER_PORT` | `8080` | 片上 HTTP 服务的本地端口。 |
-| `EXAMPLE_PROXY_REMOTE_PORT` | `6000` | 由 `frps` 暴露出去的端口。 |
+| `EXAMPLE_PROXY_REMOTE_PORT` | `16683` | 由 `frps` 暴露出去的端口。 |
 
 组件级设置（任务栈、优先级、日志级别）在 **xfrpc** 菜单下，可选模块 **TLS**、
 **wire protocol v2**、**snappy 压缩**、**健康检查** 也在这里，且默认全部为 `n`。
@@ -81,13 +82,13 @@ SakuraFrp 隧道配置与示例选项的对应关系：
 [common]
 user = s-000q2qbede2ef3          # -> EXAMPLE_FRPS_USER
 token = <访问密钥>                # -> EXAMPLE_FRPS_AUTH_TOKEN
-server_addr = test.u33794.nyat.app
+server_addr = frp-can.com
 server_port = 8088               # -> EXAMPLE_FRPS_SERVER_ADDR / _PORT
 
-[esp32]                          # 段名 -> EXAMPLE_PROXY_NAME
+[test]                           # 段名 -> EXAMPLE_PROXY_NAME
 type = tcp
 local_port = 8080                # -> EXAMPLE_HTTP_SERVER_PORT
-remote_port = 61698              # -> EXAMPLE_PROXY_REMOTE_PORT
+remote_port = 16683              # -> EXAMPLE_PROXY_REMOTE_PORT
 ```
 
 ## 编译、烧录、验证
@@ -109,7 +110,7 @@ I (1600) app_main: xfrpc: login OK
 接着**通过隧道**访问页面 —— 从任意能访问 `frps` 主机的机器上发起，而不是访问 ESP32 的局域网地址：
 
 ```bash
-curl http://<frps-host>:6000/
+curl http://<frps-host>:16683/
 ```
 
 成功时会返回：

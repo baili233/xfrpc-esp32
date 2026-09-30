@@ -21,9 +21,9 @@ browser ──► frps:<remote_port> ──► ESP32 (xfrpc) ──► 127.0.0.1
 2. `http_server_start()` — starts a small `lwIP` socket server that answers every
    request with the same static page. It stands in for "the service you actually
    want to expose".
-3. `xfrpc_start()` — connects to `frps`, logs in with the configured token, and
-   registers one TCP proxy from `127.0.0.1:<local_port>` to
-   `frps:<remote_port>`.
+3. `xfrpc_start_from_string()` — loads an embedded INI config, connects to
+   `frps`, logs in with the configured token, and registers one TCP proxy from
+   `127.0.0.1:<local_port>` to `frps:<remote_port>`.
 
 State transitions from the component are printed by the `on_xfrpc_state()` callback
 (`connecting`, `connected`, `login OK`, `reconnecting`, `stopped`, `fatal`).
@@ -50,14 +50,14 @@ Under **xfrpc example configuration**:
 | ------ | ------- | ----------- |
 | `EXAMPLE_WIFI_SSID` | `myssid` | AP to join. |
 | `EXAMPLE_WIFI_PASSWORD` | `mypassword` | AP password. |
-| `EXAMPLE_FRPS_SERVER_ADDR` | `192.168.1.100` | `frps` host or IP. |
-| `EXAMPLE_FRPS_SERVER_PORT` | `7000` | `frps` bind port (not the remote port). |
-| `EXAMPLE_FRPS_AUTH_TOKEN` | `esp32-frpc-token` | Must match `auth.token` in `frps.toml`/`frps.ini`. |
-| `EXAMPLE_FRPS_USER` | `""` | `[common]` `user`. Required by third-party providers (SakuraFrp, …): the wire-level proxy name becomes `{user}.{proxy_name}`. Empty for a self-hosted `frps`. |
-| `EXAMPLE_PROXY_NAME` | `web` | Name of the proxy section (`[esp32]` in the provider panel). |
+| `EXAMPLE_FRPS_SERVER_ADDR` | `frp-can.com` | `frps` host or IP. |
+| `EXAMPLE_FRPS_SERVER_PORT` | `8088` | `frps` bind port (not the remote port). |
+| `EXAMPLE_FRPS_AUTH_TOKEN` | `bede95468e552ef3` | Must match `auth.token` in `frps.toml`/`frps.ini`. |
+| `EXAMPLE_FRPS_USER` | `s-000q2qbede2ef3` | `[common]` `user`. Required by third-party providers (SakuraFrp, …): the wire-level proxy name becomes `{user}.{proxy_name}`. Empty for a self-hosted `frps`. |
+| `EXAMPLE_PROXY_NAME` | `test` | Name of the proxy section (`[test]` in the provider panel). |
 | `EXAMPLE_SNTP_SERVER` | `ntp.aliyun.com` | NTP server used to sync the clock before login (frp token auth signs a unix timestamp). |
 | `EXAMPLE_HTTP_SERVER_PORT` | `8080` | Local port of the on-chip HTTP server. |
-| `EXAMPLE_PROXY_REMOTE_PORT` | `6000` | Port exposed by `frps`. |
+| `EXAMPLE_PROXY_REMOTE_PORT` | `16683` | Port exposed by `frps`. |
 
 Component-level settings (task stack, priority, log level) are under **xfrpc**,
 together with the optional modules — **TLS**, **wire protocol v2**, **snappy
@@ -97,10 +97,10 @@ token = <access key>             # -> EXAMPLE_FRPS_AUTH_TOKEN
 server_addr = test.u33794.nyat.app
 server_port = 8088               # -> EXAMPLE_FRPS_SERVER_ADDR / _PORT
 
-[esp32]                          # section name -> EXAMPLE_PROXY_NAME
+[test]                           # section name -> EXAMPLE_PROXY_NAME
 type = tcp
 local_port = 8080                # -> EXAMPLE_HTTP_SERVER_PORT
-remote_port = 61698              # -> EXAMPLE_PROXY_REMOTE_PORT
+remote_port = 16683              # -> EXAMPLE_PROXY_REMOTE_PORT
 ```
 
 ## Build, flash, verify
@@ -123,7 +123,7 @@ Now request the page **through the tunnel** — from any machine that can reach 
 `frps` host, not from the ESP32's LAN address:
 
 ```bash
-curl http://<frps-host>:6000/
+curl http://<frps-host>:16683/
 ```
 
 A successful run returns:

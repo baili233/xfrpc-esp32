@@ -2,7 +2,7 @@
 /*
  * ESP32 port: public API of the xfrpc ESP-IDF component.
  *
- * Configuration is passed programmatically (no config file parsing).
+ * Configuration can be passed programmatically or loaded from INI/TOML.
  *
  * Basic usage:
  *
@@ -22,6 +22,7 @@
 #define XFRPC_ESP32_PUBLIC_API_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "xfrpc_events.h"
@@ -73,6 +74,13 @@ typedef struct {
 /** State transition callback (invoked on the xfrpc event task). */
 typedef void (*xfrpc_event_cb_t)(xfrpc_state_t state, void *user);
 
+/** Configuration text format for file/string entry points. */
+typedef enum {
+    XFRPC_CONFIG_FORMAT_AUTO = 0, /* .toml by extension, content guess for strings */
+    XFRPC_CONFIG_FORMAT_INI = 1,
+    XFRPC_CONFIG_FORMAT_TOML = 2,
+} xfrpc_config_format_t;
+
 /**
  * @brief Start the xfrpc client on a dedicated FreeRTOS task.
  *
@@ -87,6 +95,36 @@ typedef void (*xfrpc_event_cb_t)(xfrpc_state_t state, void *user);
 int  xfrpc_start(const xfrpc_client_config_t *cfg,
                  const xfrpc_tcp_proxy_t *proxies, int proxy_count,
                  xfrpc_event_cb_t cb, void *user);
+
+/**
+ * @brief Load configuration from a file and start the xfrpc client.
+ *
+ * @param path   configuration file path readable through the ESP-IDF VFS
+ * @param format config format; AUTO selects TOML for a `.toml` extension,
+ *               otherwise INI
+ * @param cb     optional state transition callback
+ * @param user   opaque pointer passed back to cb
+ *
+ * @return 0 on success, -1 on invalid configuration, 1 if already running
+ */
+int xfrpc_start_from_file(const char *path, xfrpc_config_format_t format,
+                          xfrpc_event_cb_t cb, void *user);
+
+/**
+ * @brief Load configuration from memory and start the xfrpc client.
+ *
+ * @param config configuration text (does not need to be NUL-terminated)
+ * @param length number of bytes in config; 0 means strlen(config)
+ * @param format config format; AUTO guesses TOML for frp-style keys/arrays,
+ *               otherwise INI
+ * @param cb     optional state transition callback
+ * @param user   opaque pointer passed back to cb
+ *
+ * @return 0 on success, -1 on invalid configuration, 1 if already running
+ */
+int xfrpc_start_from_string(const char *config, size_t length,
+                            xfrpc_config_format_t format,
+                            xfrpc_event_cb_t cb, void *user);
 
 /**
  * @brief Request a clean stop; the event task exits asynchronously.

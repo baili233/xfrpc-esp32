@@ -7,7 +7,7 @@
 #             "// ESP32 port:" comments)
 #   port/   — compatibility layers (mini-libevent, OpenSSL->mbedtls,
 #             json-c->cJSON) + public API implementation + platform glue
-#   vendor/ — snappy / uthash, third-party, unmodified except where noted
+#   vendor/ — snappy / uthash / tomlc17, third-party, unmodified except where noted
 
 # Optional modules (Kconfig "xfrpc" menu). Sources that are switched off
 # are not compiled at all: the Kconfig-guarded stubs in port/module_stubs.c
@@ -50,13 +50,16 @@ idf_component_register(
         "src/crypto.c"
         "src/crypto_stream.c"
         "src/debug.c"
+        "src/ini.c"
         "src/login.c"
         "src/msg.c"
         "src/proxy.c"
         "src/proxy_tcp.c"
         "src/tcpmux.c"
+        "src/toml_parser.c"
         "src/utils.c"
         "src/xfrpc.c"
+        "vendor/tomlc17/tomlc17.c"
         "src/quic_client_transport.c"   # stub build (no HAVE_NGTCP2)
         # ESP32 port: compatibility layers
         "port/mini_event.c"

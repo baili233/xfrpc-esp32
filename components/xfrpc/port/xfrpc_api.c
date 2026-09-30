@@ -76,6 +76,57 @@ static void set_str(char **field, const char *value)
     *field = strdup(value);
 }
 
+static int xfrpc_launch(xfrpc_event_cb_t cb, void *user)
+{
+    g_api.cb = cb;
+    g_api.user = user;
+    g_api.running = true;
+
+#if !defined(CONFIG_XFRPC_TASK_STACK_SIZE) || CONFIG_XFRPC_TASK_STACK_SIZE < 8192
+#error "CONFIG_XFRPC_TASK_STACK_SIZE must be at least 8192"
+#endif
+
+    if (xTaskCreate(xfrpc_task, "xfrpc",
+                    CONFIG_XFRPC_TASK_STACK_SIZE, NULL,
+                    CONFIG_XFRPC_TASK_PRIORITY, &g_api.task) != pdPASS) {
+        debug(LOG_ERR, "xfrpc_start: failed to create task");
+        g_api.running = false;
+        return -1;
+    }
+
+    return 0;
+}
+
+static int validate_loaded_config(void)
+{
+    struct common_conf *cc = get_common_config();
+    struct proxy_service *all_ps = get_all_proxy_services();
+    struct proxy_service *ps = NULL;
+    struct proxy_service *tmp = NULL;
+
+    if (!cc || !cc->server_addr || !cc->server_addr[0]) {
+        debug(LOG_ERR, "xfrpc_start_from_config: server_addr is required");
+        return -1;
+    }
+    if (!validate_heartbeat_config())
+        return -1;
+
+#if !defined(CONFIG_XFRPC_ENABLE_TLS)
+    if (cc->tls_enable) {
+        debug(LOG_ERR, "xfrpc_start_from_config: TLS requested but this build "
+              "has TLS disabled (CONFIG_XFRPC_ENABLE_TLS=n)");
+        return -1;
+    }
+#endif
+
+    HASH_ITER(hh, all_ps, ps, tmp) {
+        if (!validate_proxy(ps))
+            return -1;
+    }
+
+    return 0;
+}
+
 int xfrpc_start(const xfrpc_client_config_t *cfg,
                 const xfrpc_tcp_proxy_t *proxies, int proxy_count,
                 xfrpc_event_cb_t cb, void *user)
@@ -94,6 +145,7 @@ int xfrpc_start(const xfrpc_client_config_t *cfg,
     }
 
     /* ---- common config ---- */
+    free_all_proxy_services();
     struct common_conf *cc = init_common_config();
     if (!cc)
         return -1;
@@ -158,23 +210,46 @@ int xfrpc_start(const xfrpc_client_config_t *cfg,
     }
 
     /* ---- launch the event loop task ---- */
-    g_api.cb = cb;
-    g_api.user = user;
-    g_api.running = true;
+    return xfrpc_launch(cb, user);
+}
 
-#if !defined(CONFIG_XFRPC_TASK_STACK_SIZE) || CONFIG_XFRPC_TASK_STACK_SIZE < 8192
-#error "CONFIG_XFRPC_TASK_STACK_SIZE must be at least 8192"
-#endif
-
-    if (xTaskCreate(xfrpc_task, "xfrpc",
-                    CONFIG_XFRPC_TASK_STACK_SIZE, NULL,
-                    CONFIG_XFRPC_TASK_PRIORITY, &g_api.task) != pdPASS) {
-        debug(LOG_ERR, "xfrpc_start: failed to create task");
-        g_api.running = false;
+int xfrpc_start_from_file(const char *path, xfrpc_config_format_t format,
+                          xfrpc_event_cb_t cb, void *user)
+{
+    if (g_api.running) {
+        debug(LOG_ERR, "xfrpc_start_from_file: already running");
+        return 1;
+    }
+    if (!path || !path[0]) {
+        debug(LOG_ERR, "xfrpc_start_from_file: path is required");
         return -1;
     }
+    if (load_config_file(path, (int)format) != 0)
+        return -1;
+    if (validate_loaded_config() != 0)
+        return -1;
 
-    return 0;
+    return xfrpc_launch(cb, user);
+}
+
+int xfrpc_start_from_string(const char *config, size_t length,
+                            xfrpc_config_format_t format,
+                            xfrpc_event_cb_t cb, void *user)
+{
+    if (g_api.running) {
+        debug(LOG_ERR, "xfrpc_start_from_string: already running");
+        return 1;
+    }
+    if (!config) {
+        debug(LOG_ERR, "xfrpc_start_from_string: config is required");
+        return -1;
+    }
+    if (load_config_string(config, length, (int)format) != 0)
+        return -1;
+    if (validate_loaded_config() != 0)
+        return -1;
+
+    return xfrpc_launch(cb, user);
 }
 
 void xfrpc_stop(void)

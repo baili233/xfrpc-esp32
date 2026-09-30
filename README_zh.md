@@ -204,6 +204,37 @@ TLS 之所以是后两行之间主要差异，是因为它把一个 mbedtls TLS 
 TCP 代理、AES 加密和 `tcp_mux` 属于协议 MVP，始终参与编译；
 `tcp_mux`、`use_encryption`、`use_compression` 可在运行时按代理通过 API 关闭。
 
+## INI / TOML 配置
+
+配置可以从 ESP-IDF VFS 文件或内存字符串加载：
+
+```c
+/* AUTO：.toml 后缀按 TOML 解析，其他文件按 INI 解析。 */
+xfrpc_start_from_file("/fs/xfrpc.toml",
+                      XFRPC_CONFIG_FORMAT_AUTO,
+                      on_state, NULL);
+
+static const char ini[] =
+    "[common]\n"
+    "server_addr = 203.0.113.10\n"
+    "server_port = 7000\n"
+    "token = secret\n"
+    "\n"
+    "[web]\n"
+    "type = tcp\n"
+    "local_ip = 127.0.0.1\n"
+    "local_port = 80\n"
+    "remote_port = 6000\n";
+
+xfrpc_start_from_string(ini, sizeof(ini) - 1,
+                        XFRPC_CONFIG_FORMAT_INI,
+                        on_state, NULL);
+```
+
+字符串使用 `XFRPC_CONFIG_FORMAT_AUTO` 时，会识别 `serverAddr`、
+`auth.token`、`transport.`、`[[proxies]]` 等常见 frp TOML 标记；格式不明确时
+建议显式传入 `XFRPC_CONFIG_FORMAT_INI` 或 `XFRPC_CONFIG_FORMAT_TOML`。
+
 ## TLS
 
 `frps` 在 `transport.tls.force` 打开时会对每条连接做 TLS 识别；即使不开，服务端同样会识别
